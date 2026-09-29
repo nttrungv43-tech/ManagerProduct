@@ -17,6 +17,8 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
   const [defectTypes, setDefectTypes] = useState({ yellow: false, red: false, tear: false });
   const [logOpen, setLogOpen] = useState(false);
   const [entries, setEntries] = useState([]);
+  // planned FEAT-01: editingId dùng cho form sửa nhật ký
+  // eslint-disable-next-line no-unused-vars
   const [editingId, setEditingId] = useState(null);
 
   const produced = item.produced || 0;

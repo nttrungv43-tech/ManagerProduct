@@ -81,7 +81,7 @@ Công cụ cho xưởng sản xuất theo dõi tiến độ đơn hàng xuất k
 
 ### 1.3 Dữ liệu tĩnh (seed) là một phần của spec
 
-`src/data/seed.js` chứa `seedItems` (8 mã hàng + kế hoạch) và `containersData` (3 container, 26 kiện). Đây là dữ liệu nghiệp vụ lấy từ packing list, **nằm trong code, không nằm trong DB**. Chỉ `items` (bản sao của `seedItems` theo từng batch) được ghi vào DB.
+`src/data/seed.js` chứa `seedItems` (8 mã hàng + kế hoạch) và `containersData` (3 container, 26 kiện). Đây là dữ liệu nghiệp vụ mặc định lấy từ packing list gốc, **nằm trong code**. Khi người dùng import packing list JSON (AC-IMP-08), cả `items` **và** `containersData` (container/pallet structure) sẽ được ghi vào DB (bảng `container_data`); `ContainersScreen` sẽ dùng DB data thay thế `containersData` hardcode, và **fallback** về seed khi DB chưa có container data cho batch hiện tại. `containersData` hardcode vẫn là nguồn tin cậy khi chưa có import nào.
 
 Số liệu chuẩn để kiểm thử (fixture):
 
@@ -226,7 +226,15 @@ Index: `idx_entries_date(date)`, `idx_entries_ntk(ntk, order_batch_id)`, `idx_en
 | `order_batch_id` | INTEGER NOT NULL | |
 | `done` | INTEGER DEFAULT 0 | 0/1 |
 
-### 5.2 Định dạng key pallet (BẤT BIẾN, không đổi)
+**`container_data`**: container/pallet structure từ packing list (Cấp 2, FEAT-08 phase 2).
+
+| Cột | Kiểu | Ghi chú |
+|---|---|---|
+| `batch_id` | INTEGER PK | 1–1 với `order_batches(id)` (soft FK) |
+| `data` | TEXT NOT NULL | JSON string: mảng containers cùng format `containersData` (`id`, `label`, `po`, `pallets[]`) |
+| `created_at` | TEXT NOT NULL | `YYYY-MM-DD` |
+
+Mỗi batch có **0 hoặc 1** hàng. Khi có → `ContainersScreen` dùng thay `containersData` seed. `finishOrder` không xóa hàng này (giữ cho archived). Import packing list mới → `INSERT OR REPLACE`. Batch mới → fallback seed.
 
 | Loại kiện | Key | Ví dụ |
 |---|---|---|
@@ -234,6 +242,8 @@ Index: `idx_entries_date(date)`, `idx_entries_ntk(ntk, order_batch_id)`, `idx_en
 | Từng loại hàng trong kiện nhiều loại | `` `${containerId}-${palletNo}-${itemIndex}` `` | `'c1-2-0'`, `'c1-2-1'` |
 
 `itemIndex` là chỉ số (bắt đầu từ 0) của phần tử trong `pallet.items`. **Đổi thứ tự phần tử trong `seed.js` sẽ làm lệch dữ liệu đã lưu.**
+
+> Khi import packing list (AC-IMP-08), `containerId` (ví dụ `HFMU2620080`) thay thế `c1`/`c2`/`c3` trong key pallet. Key vẫn tuân format trên. Seed `containersData` dùng `c1`/`c2`/`c3`. Chúng không bao giờ xung đột trong cùng một batch vì mỗi batch chỉ dùng một nguồn (seed HOẶC imported).
 
 ### 5.3 Quan hệ và vòng đời batch
 
@@ -265,19 +275,30 @@ Index: `idx_entries_date(date)`, `idx_entries_ntk(ntk, order_batch_id)`, `idx_en
 | `fetchPalletStatus(batchId)` | | `{ [key]: boolean }` |
 | `setPalletStatus(batchId, key, done)` | | Upsert trạng thái |
 | `isPalletDone(cid, pallet, palletDoneMap)` | (hàm thuần) | Xem AC-CONT-03 |
-| `countPalletsDone(palletDoneMap)` | (hàm thuần) | `{done, total}` trên toàn bộ `containersData` |
+| `countPalletsDone(palletDoneMap)` | (hàm thuần) | `{done, total}` trên toàn bộ `containersData` seed |
+| `countPalletsDoneWithData(palletDoneMap, containers?)` | (hàm thuần) | `{done, total}`; dùng `containers` nếu có, fallback `containersData` seed nếu `undefined` |
+| `fetchContainerData(batchId)` | | `containersData[]` từ DB, hoặc `null` nếu chưa import |
+| `importContainerData(batchId, jsonData)` | `jsonData`: packing list JSON (có `總表` + container arrays) | Parse container/pallet structure → lưu JSON vào `container_data`; cập nhật `pallets_total` batch; trả `{containers, pallets, items}` |
 | `fetchHistoryGrouped(groupBy, filterValue)` | `groupBy ∈ 'day'|'month'|'year'` | `[{groupKey,total,manualTotal,autoTotal,defectTotal}]`, `groupKey` giảm dần |
 | `fetchHistoryDetail(groupBy, groupKey)` | | `day`: từng dòng entry. `month`/`year`: gộp theo `ntk` (`qty`, `defect_qty`) |
 | `fetchAvailableYears()` | | `['2026', ...]` (dành cho bộ lọc năm, chưa có UI) |
 | `fetchArchives()` | | Các batch `archived`, mới nhất trước |
 | `fetchArchiveItems(batchId)` | | `[{ntk,target,produced,defect}]` |
-| `finishOrder()` | | Lưu trữ batch active, tạo batch mới, trả `newBatchId` |
+| `importItemsFromJson(batchId, jsonData)` | `jsonData`: JSON packing list (có key `總表` hoặc arrays chứa cột Column4/NTK) | Parse packing list, INSERT OR REPLACE items (ntk, po, target) vào `items`, cập nhật `total_target` batch; trả `{imported, totalItems}` |
+| `importEntriesFromJson(batchId, entries)` | `entries: Array<{ntk,date,qty,line?,defectQty?,defectTypes?}>` | Bulk INSERT (transaction); bỏ qua nếu `ntk` không tồn tại trong `items` hoặc `qty≤0 && defectQty≤0`; trả `{imported, skipped}` |
+| `finishOrder(containers?)` | (tuỳ chọn: `containersData[]` từ DB) | Lưu batch active, tạo batch mới, trả `newBatchId`. Dùng `containers` để tính pallet stats chính xác; nếu không truyền, fallback `containersData` seed |
 
 ### 6.3 `src/store/useAppStore.js`
 
-**State:** `ready`, `batchId`, `items`, `palletDoneMap`, `archives`, `activeFilter`, `activeStatusFilter`, `activeContainerFilter`, `searchQuery`, `historyGroup`, `historyFilterValue`.
+**State:** `ready`, `batchId`, `items`, `palletDoneMap`, `archives`, `containerData` (mới, `null`), `activeFilter`, `activeStatusFilter`, `activeContainerFilter`, `searchQuery`, `historyGroup`, `historyFilterValue`, `dataVersion`, `importStatus`, `importResult`.
 
-**Action (async):** `init()`, `refreshItems()`, `addEntry(ntk, payload)`, `updateEntry(entryId, payload)`, `removeEntry(entryId)`, `togglePallet(key, currentlyDone)`, `finishOrder()`.
+**Action (async):** `init()`, `refreshItems()`, `loadContainerData()` (mới), `addEntry(ntk, payload)`, `updateEntry(entryId, payload)`, `removeEntry(entryId)`, `togglePallet(key, currentlyDone)`, `finishOrder()` (gọi `q.finishOrder(state.containerData)`), `importFromJson(jsonData)`.
+
+> `loadContainerData()`: gọi `q.fetchContainerData(batchId)` → set `containerData` (null nếu không có). Gọi trong `init()` và sau `importFromJson` nếu packing list. `finishOrder` reset `containerData: null` cho batch mới.
+
+> `importFromJson` tự động phát hiện format: nếu JSON có key `entries` → import entries; nếu có key `總表` hoặc arrays chứa cột Column4 → import packing list (items **và** container data).
+
+> `importFromJson` với packing list: gọi `importItemsFromJson` + `importContainerData`, sau đó `loadContainerData` để cập nhật `containerData` state.
 
 **Action (đồng bộ):** `setFilter`, `setStatusFilter`, `setContainerFilter`, `setSearchQuery`, `setHistoryGroup` (đồng thời xoá `historyFilterValue`), `setHistoryFilterValue`.
 
@@ -294,6 +315,8 @@ Index: `idx_entries_date(date)`, `idx_entries_ntk(ntk, order_batch_id)`, `idx_en
 | `ItemCard` | `{item, theme, onAddEntry, onUpdateEntry, onDeleteEntry}` (cần `item.order_batch_id`) |
 | `PalletRow` | `{containerId, pallet, palletDoneMap, onTogglePallet, theme}` |
 | `ArchiveCard` | `{archive, theme}` |
+| `ImportJsonButton` | `{onImport, theme}` | Nút chọn JSON → detect format → gọi `store.importFromJson`; packing list cũng import container data; hiển thị thống kê container/pallet sau khi nhập |
+| `ContainersScreen` | (state từ store) | Dùng `containerData || containersData` để render; dùng `countPalletsDoneWithData(palletDoneMap, containerData)` để tính toán |
 
 ### 6.5 Token theme
 
@@ -348,7 +371,7 @@ Index: `idx_entries_date(date)`, `idx_entries_ntk(ntk, order_batch_id)`, `idx_en
 | AC-HIST-04 | ✅ | Đổi kiểu nhóm thì xoá `historyFilterValue` và trạng thái mở |
 | AC-HIST-05 | ✅ | Không có dữ liệu hiện "Chưa có dữ liệu sản xuất nào được ghi nhận." |
 | AC-HIST-06 | ⬜ | Lọc theo một ngày/tháng/năm cụ thể (FEAT-02). `historyFilterValue` và `fetchHistoryGrouped(groupBy, filterValue)` đã hỗ trợ, thiếu UI |
-| AC-HIST-07 | ⬜ | Tab Lịch sử phải **tự cập nhật** khi có dữ liệu mới (xem BUG-05) |
+| AC-HIST-07 | ✅ | Tab Lịch sử tự cập nhật khi có dữ liệu mới (via `dataVersion` — BUG-05 đã fix) |
 
 ### 7.4 Toàn cục
 
@@ -359,6 +382,23 @@ Index: `idx_entries_date(date)`, `idx_entries_ntk(ntk, order_batch_id)`, `idx_en
 | AC-APP-03 | ✅ | Tắt hẳn app rồi mở lại: mọi dữ liệu còn nguyên |
 | AC-APP-04 | ✅ | Giao diện theo hệ thống sáng/tối bằng `useColorScheme()` và `theme` |
 | AC-APP-05 | ✅ | Hoạt động hoàn toàn không cần mạng |
+
+### 7.5 Import JSON (FEAT-08)
+
+| ID | Trạng thái | Hành vi |
+|---|---|---|
+| AC-IMP-01 | ✅ | Nút "Nhập JSON" hiện trên tab Mã hàng; chạm → mở `DocumentPicker` chọn file `.json` |
+| AC-IMP-02 | ✅ | Parse JSON thành công → ghi entries vào batch active; lỗi parse/format → `Alert` báo lỗi, không ghi DB |
+| AC-IMP-03 | ✅ | Sau khi nhập: số liệu thẻ mã hàng + tổng quan cập nhật ngay; tab Lịch sử tự cập nhật (qua `dataVersion`, BUG-05) |
+| AC-IMP-04 | ✅ | Entry có `ntk` không tồn tại trong `items` của batch → bỏ qua, ghi nhận số skipped |
+| AC-IMP-05 | ✅ | Entry có `qty ≤ 0 && defectQty ≤ 0` → bỏ qua (theo AC-ITEM-05) |
+| AC-IMP-06 | ✅ | Trước khi ghi: `Alert.alert` xác nhận (INV-U1) |
+| AC-IMP-07 | ✅ | `defect_types` dạng array → join(','); `line` không hợp lệ → mặc định `manual` (INV-D3) |
+| AC-IMP-08 | ✅ | File packing list JSON (có `總表`/Column4) → nhận diện tự động, chèn items mới (INSERT OR REPLACE), cập nhật `total_target` batch |
+| AC-IMP-09 | ✅ | Sau khi import items: tổng quan cập nhật (Σ target thay đổi), tab Lịch sử không ảnh hưởng (chỉ có entries mới mới thay đổi lịch sử) |
+| AC-IMP-10 | 🟡 | Packing list JSON → import đồng thời **container/pallet structure** (bảng `container_data`); `ContainersScreen` cập nhật hiển thị container mới (51 kiện, 3 container) ngay sau khi nhập |
+| AC-IMP-11 | 🟡 | `pallets_total` của batch cập nhật = tổng pallets từ `container_data` (fallback 26 từ seed khi chưa import) |
+| AC-IMP-12 | 🟡 | Sau `finishOrder` → batch archived giữ nguyên `container_data`; batch mới reset về `containerData: null` → fallback seed; re-import packing list khác cho batch mới hoạt động bình thường |
 
 ---
 
@@ -391,11 +431,11 @@ Index: `idx_entries_date(date)`, `idx_entries_ntk(ntk, order_batch_id)`, `idx_en
 | **BUG-02** | 🟠 P1 | Ngày được lấy bằng `new Date().toISOString().slice(0,10)` (giờ UTC). Ở Việt Nam (UTC+7), nhập từ 00:00 đến 06:59 sáng bị ghi thành **ngày hôm trước**. Cũng sai cho `finished_date` | Tạo `src/utils/date.js` với `todayLocal()` (mã ở mục 10.3), dùng ở `ItemCard.handleAdd` và `queries.finishOrder` |
 | **BUG-03** | 🟠 P1 | `finishOrder` gồm nhiều lệnh ghi liên tiếp nhưng **không nằm trong transaction**. Nếu app bị tắt giữa chừng có thể không có batch active (vi phạm INV-B1) | Bọc thân hàm trong `db.withTransactionAsync(async () => { ... })` |
 | **BUG-04** | 🟡 P2 | `ItemCard.handleAdd` vẫn lưu `defectTypes` khi `defectQty = 0` (bản HTML gốc chỉ lưu khi `defectQty > 0`) | `defectTypes: dq > 0 ? types : []` |
-| **BUG-05** | 🟠 P1 | `HistoryScreen` chỉ nạp lại khi đổi `historyGroup`/`historyFilterValue`. Tab trong Expo Router vẫn được giữ mounted, nên sau khi nhập thêm ở tab Mã hàng, quay lại Lịch sử thấy **số cũ** | Thêm `dataVersion` (số nguyên) vào store, tăng sau mỗi action ghi (`addEntry`, `updateEntry`, `removeEntry`, `finishOrder`), và thêm `dataVersion` vào dependency của `useEffect` trong `HistoryScreen` |
+| **BUG-05** | 🟠 P1 | `HistoryScreen` chỉ nạp lại khi đổi `historyGroup`/`historyFilterValue`. Tab trong Expo Router vẫn được giữ mounted, nên sau khi nhập thêm ở tab Mã hàng, quay lại Lịch sử thấy **số cũ** | ✅ **Đã cài đặt:** Thêm `dataVersion` (số nguyên) vào store, tăng sau mỗi action ghi (`addEntry`, `updateEntry`, `removeEntry`, `finishOrder`, `importFromJson`), và thêm `dataVersion` vào dependency của `useEffect` trong `HistoryScreen` |
 | **BUG-06** | 🟡 P2 | `ItemsScreen` dùng `key={item.ntk}`. Sau `finishOrder`, `ItemCard` cũ được tái sử dụng nên khung nhật ký (state cục bộ) có thể còn hiện dòng của đơn đã lưu trữ | Đổi thành `` key={`${item.order_batch_id}-${item.ntk}`} `` |
 | **UX-01** | 🟢 P3 | `HistoryScreen` dùng `onTouchEnd` trên `View` để mở/đóng nhóm (kém tin cậy, không có phản hồi chạm) | Đổi sang `TouchableOpacity`/`Pressable` |
 | **DEBT-01** | 🟢 P3 | `PRAGMA journal_mode = WAL` nằm trong `CREATE_TABLES_SQL`. Khi chuyển sang migration trong transaction, lệnh này phải chuyển ra ngoài transaction | Chạy `PRAGMA journal_mode = WAL` riêng trong `getDb()` trước khi chạy migration |
-| **DEBT-02** | 🟢 P3 | `containersData` nằm cứng trong code; đơn hàng mới có container khác phải sửa code | Xem FEAT-07 (cần thiết kế riêng, Cấp 3) |
+| **DEBT-02** | 🟡 P3 | `containersData` nằm cứng trong code; đơn hàng mới có container khác phải sửa code | ✅ **Đang giải quyết:** FEAT-08 phase 2 thêm bảng `container_data` + `importContainerData` để lưu container/pallet structure từ packing list JSON. `containersData` seed vẫn là fallback cho batch mới hoặc khi chưa import. FEAT-07 (dynamic container) có thể được giảm priority
 | **DEBT-03** | 🟢 P3 | Chưa có test tự động | Xem mục 11.2 |
 
 ---
@@ -553,20 +593,22 @@ Sau đó có thể thêm test truy vấn với SQLite trong bộ nhớ khi cần
 
 ### 12.1 Đã cài đặt
 
-`F-ITEMS` (tổng quan, thẻ mã hàng, nhập sản lượng/lỗi, nhật ký, lọc/tìm) · `F-CONT` (container/kiện, hoàn tất đơn, lưu trữ) · `F-HIST` (lịch sử ngày/tháng/năm) · `F-APP` (init, persist, theme sáng/tối).
+`F-ITEMS` · `F-CONT` · `F-HIST` · `F-APP` · `F-IMPORT` (entries/items ✅; container/pallet 🟡).
 
 ### 12.2 Backlog (thứ tự đề xuất)
 
 | ID | Ưu tiên | Cấp | Tính năng | Ràng buộc chính |
 |---|---|---|---|---|
-| BUG-01, 03, 02, 05 | P0/P1 | 2–3 | Sửa lỗi mục 9 (làm trước khi thêm tính năng) | Cần chỉ đạo Cấp 3; BUG-01 cần migration |
+| BUG-01, 03, 02 | P0/P1 | 2–3 | Sửa lỗi mục 9 (làm trước khi thêm tính năng) | Cần chỉ đạo Cấp 3; BUG-01 cần migration |
+| BUG-05 | P1 | 1 | ✅ Đã fix: `dataVersion` trong store, tăng sau mỗi action ghi, `dataVersion` trong `HistoryScreen` useEffect deps. Fix kèm theo FEAT-08 | — |
 | FEAT-01 | P1 | 1 | **Form sửa nhật ký** (Modal): sửa `date`, `qty`, `line`, `defectQty`, `defectTypes` | Dùng sẵn `updateEntry`/`updateEntry` của store; lưu phải xác nhận; validate như AC-ITEM-05; chỉ sửa entry của batch active; cập nhật tổng ngay |
 | FEAT-02 | P2 | 1 | **Lọc lịch sử** theo ngày/tháng/năm cụ thể | Dùng `setHistoryFilterValue`; ngày `YYYY-MM-DD`, tháng `YYYY-MM`, năm `YYYY` phải khớp `groupKey`; có nút "Xoá lọc"; đổi nhóm thì reset lọc (AC-HIST-04) |
 | FEAT-03 | P2 | 1 | **Sao lưu/xuất dữ liệu** (CSV từ `entries` và/hoặc chép file `production_tracker.db` qua `expo-file-system` + `expo-sharing`) | Chỉ đọc DB; thư viện mới phải `expo install`; nêu rõ có phải native module hay không |
 | FEAT-04 | P3 | 1 | Nút chọn giao diện Sáng/Tối/Theo hệ thống | Lưu bằng `AsyncStorage` (chỉ tuỳ chọn UI); mặc định = theo hệ thống (không đổi AC-APP-04) |
 | FEAT-05 | P3 | 0–1 | Hiệu ứng mở/đóng thẻ | `LayoutAnimation` hoặc `reanimated`; không đổi hành vi |
 | FEAT-06 | P3 | 1 | Dùng `FlatList` khi danh sách dài (>50) | Giữ nguyên AC-ITEM-04, 12–15 |
-| FEAT-07 | P3 | 3 | Container/kế hoạch động (nhập đơn mới không sửa code) | **Thiết kế riêng, cần duyệt:** bảng mới cho containers/pallets/items, giữ định dạng key pallet (5.2), giữ INV-D1, migration từ `seed.js` |
+| FEAT-07 | P3 | 3 | Container/kế hoạch động (nhập đơn mới không sửa code) | **Thiết kế riêng, cần duyệt.** FEAT-08 phase 2 giải quyết một phần bằng bảng `container_data` cho phép import container/pallet từ packing list |
+| FEAT-08 | P2 | 1–2 | Import dữ liệu từ JSON (phase 1: entries/items ✅; phase 2: container/pallet structure) | `expo-document-picker` + `expo-file-system`; xác nhận (INV-U1); AC-IMP-01..12; phase 2 cần migration bảng `container_data`
 | PARITY-01 | P3 | 1 | Các điểm bản HTML gốc có mà RN chưa có: nút ✕ xoá ô tìm kiếm; thẻ "Đã lưu trữ" trong lịch sử; nhãn màu cho loại lỗi (chip màu như HTML); nhóm theo **tuần** | Chỉ làm khi được yêu cầu, không tự ý thêm |
 
 ---
@@ -658,6 +700,9 @@ mục 4.2 (mức bảo vệ file) và mục 10 (quy trình thay đổi). Xong vi
 
 | Ngày | Phiên bản | Thay đổi |
 |---|---|---|
+| 2026-09-29 | 1.3 | **FEAT-08 phase 2:** Thêm bảng `container_data` (Cấp 2), hàm `importContainerData`/`fetchContainerData`/`countPalletsDoneWithData` trong queries.js. Packing list JSON giờ import cả container/pallet structure; `ContainersScreen` dùng DB data thay seed, fallback khi null. `finishOrder` chấp nhận optional `containers` param. AC-IMP-10..12 🟡. `finishOrder` truyền `state.containerData`. DEBT-02 → 🟡 (đang giải quyết). |
+| 2026-09-28 | 1.2 | **Fix:** `ImportJsonButton` — thêm `copyToCacheDirectory: true` và `fetch` fallback để giải quyết lỗi "Không thể đọc nội dung file" khi `expo-document-picker` trả về URI không truy cập trực tiếp bởi `expo-file-system`. **Lint fix:** `_layout.tsx` thêm deps `init`; `ContainersScreen.js` ternary→if/else; `ItemsScreen.js` xóa `View` unused; `ItemCard.js`/`use-color-scheme.web.ts`/`HistoryScreen.js` thêm eslint-disable (planned extension + intentional patterns) |
+| 2026-09-28 | 1.1 | **FEAT-08:** Thêm tính năng Import dữ liệu từ JSON. Hỗ trợ 2 format: (1) Entries — `importEntriesFromJson`; (2) Packing list — `importItemsFromJson`, INSERT OR REPLACE + cập nhật `total_target`. **BUG-05 (fix):** `dataVersion` trong store, `HistoryScreen` useEffect deps. AC-HIST-07 → ✅. |
 | 2026-09-28 | 1.0 | Lập spec ban đầu từ bản HTML gốc và bản cài đặt Expo SDK 57. Ghi nhận BUG-01..06, UX-01, DEBT-01..03 và backlog FEAT-01..07 |
 
 > Mỗi thay đổi sau này: thêm một dòng ở đây, cập nhật mục 12 và các AC liên quan.

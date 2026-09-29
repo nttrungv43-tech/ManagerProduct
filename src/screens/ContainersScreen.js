@@ -4,7 +4,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, useColorSc
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, containersData } from '@/store/useAppStore';
 import { getTheme } from '@/theme';
-import { isPalletDone, countPalletsDone } from '@/db/queries';
+import { isPalletDone, countPalletsDoneWithData } from '@/db/queries';
 import FilterChips from '@/components/FilterChips';
 import ProgressBar from '@/components/ProgressBar';
 import PalletRow from '@/components/PalletRow';
@@ -12,18 +12,22 @@ import ArchiveCard from '@/components/ArchiveCard';
 
 export default function ContainersScreen() {
   const theme = getTheme(useColorScheme());
-  const { palletDoneMap, togglePallet, finishOrder, archives, activeContainerFilter, setContainerFilter } = useAppStore();
+  const { palletDoneMap, togglePallet, finishOrder, archives, activeContainerFilter, setContainerFilter, containerData } = useAppStore();
   const [expandedIds, setExpandedIds] = useState(new Set());
-
-  const cpos = [...new Set(containersData.map(c => c.po.split('+')).flat())];
-  const filtered = containersData.filter(
+  const containers = containerData || containersData;
+  const cpos = [...new Set(containers.map(c => c.po.split('+')).flat())];
+  const filtered = containers.filter(
     c => activeContainerFilter === 'all' || c.po.split('+').includes(activeContainerFilter)
   );
-  const { done, total } = countPalletsDone(palletDoneMap);
+  const { done, total } = countPalletsDoneWithData(palletDoneMap, containerData);
 
   function toggleExpand(id) {
     const next = new Set(expandedIds);
-    next.has(id) ? next.delete(id) : next.add(id);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
     setExpandedIds(next);
   }
 

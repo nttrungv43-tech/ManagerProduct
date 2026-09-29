@@ -41,4 +41,11 @@ CREATE TABLE IF NOT EXISTS pallet_status (
   done INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_pallet_batch ON pallet_status(order_batch_id);
+
+CREATE TABLE IF NOT EXISTS container_data (
+  batch_id INTEGER PRIMARY KEY,
+  data TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_container_batch ON container_data(batch_id);
 `;

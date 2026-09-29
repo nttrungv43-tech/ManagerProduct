@@ -1,17 +1,18 @@
 // src/screens/ItemsScreen.js
 import React from 'react';
-import { View, Text, TextInput, ScrollView, StyleSheet, useColorScheme } from 'react-native';
+import { Text, TextInput, ScrollView, StyleSheet, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, allPOs, filteredItems, summaryTotals } from '@/store/useAppStore';
 import { getTheme } from '@/theme';
 import SummaryCards from '@/components/SummaryCards';
 import FilterChips from '@/components/FilterChips';
 import ItemCard from '@/components/ItemCard';
+import ImportJsonButton from '@/components/ImportJsonButton';
 
 export default function ItemsScreen() {
   const theme = getTheme(useColorScheme());
   const state = useAppStore();
-  const { items, addEntry, updateEntry, removeEntry, setFilter, setStatusFilter, setSearchQuery } = state;
+  const { items, addEntry, updateEntry, removeEntry, setFilter, setStatusFilter, setSearchQuery, importFromJson } = state;
 
   const totals = summaryTotals(items);
   const pos = allPOs(items);
@@ -21,6 +22,7 @@ export default function ItemsScreen() {
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.bg }]} edges={['top']}>
       <ScrollView contentContainerStyle={styles.wrap}>
         <Text style={[styles.h1, { color: theme.ink }]}>📦 Theo dõi sản xuất hàng ngày</Text>
+        <ImportJsonButton onImport={importFromJson} theme={theme} />
         <SummaryCards totals={totals} theme={theme} />
 
         <TextInput

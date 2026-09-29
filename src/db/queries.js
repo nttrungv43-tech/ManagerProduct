@@ -85,8 +85,13 @@ export function isPalletDone(cid, pallet, palletDoneMap) {
 }
 
 export function countPalletsDone(palletDoneMap) {
+  return countPalletsDoneWithData(palletDoneMap, containersData);
+}
+
+export function countPalletsDoneWithData(palletDoneMap, containers) {
+  const data = containers || containersData;
   let done = 0, total = 0;
-  containersData.forEach(c => {
+  data.forEach(c => {
     c.pallets.forEach(p => {
       total++;
       if (isPalletDone(c.id, p, palletDoneMap)) done++;
@@ -174,7 +179,7 @@ export async function fetchArchiveItems(batchId) {
 }
 
 // "Hoàn tất đơn hàng": chỉ đổi trạng thái batch, KHÔNG copy dữ liệu.
-export async function finishOrder() {
+export async function finishOrder(containers) {
   const db = await getDb();
   const batchId = await getActiveBatchId(db);
 
@@ -186,7 +191,7 @@ export async function finishOrder() {
     `SELECT SUM(target) as target FROM items WHERE order_batch_id = ?`, [batchId]
   );
   const palletMap = await fetchPalletStatus(batchId);
-  const { done, total } = countPalletsDone(palletMap);
+  const { done: donePallets, total: totalPallets } = countPalletsDoneWithData(palletMap, containers);
 
   await db.runAsync(
     `UPDATE order_batches
@@ -198,13 +203,14 @@ export async function finishOrder() {
       targetRow?.target || 0,
       totals?.produced || 0,
       totals?.defect || 0,
-      done, total, batchId,
+      donePallets, totalPallets, batchId,
     ]
   );
 
+  const seedTotal = containersData.reduce((s, c) => s + c.pallets.length, 0);
   const newBatch = await db.runAsync(
     `INSERT INTO order_batches (status, pallets_total) VALUES ('active', ?)`,
-    [total]
+    [seedTotal]
   );
   const newBatchId = newBatch.lastInsertRowId;
   let newTarget = 0;
@@ -218,4 +224,225 @@ export async function finishOrder() {
   await db.runAsync(`UPDATE order_batches SET total_target=? WHERE id=?`, [newTarget, newBatchId]);
 
   return newBatchId;
+}
+
+// ---------- IMPORT ----------
+
+export async function importEntriesFromJson(batchId, entries) {
+  const db = await getDb();
+  let imported = 0;
+  let skipped = 0;
+
+  await db.withTransactionAsync(async () => {
+    for (const entry of entries) {
+      const { ntk, date, qty, line, defectQty, defectTypes } = entry;
+      const q = parseFloat(qty) || 0;
+      const dq = parseFloat(defectQty) || 0;
+
+      if (q <= 0 && dq <= 0) {
+        skipped++;
+        continue;
+      }
+
+      const item = await db.getFirstAsync(
+        `SELECT ntk FROM items WHERE ntk = ? AND order_batch_id = ?`,
+        [ntk, batchId]
+      );
+      if (!item) {
+        skipped++;
+        continue;
+      }
+
+      await db.runAsync(
+        `INSERT INTO entries (ntk, order_batch_id, date, qty, line, defect_qty, defect_types)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [ntk, batchId, date, q, line || 'manual', dq, (defectTypes || []).join(',')]
+      );
+      imported++;
+    }
+  });
+
+  return { imported, skipped };
+}
+
+// ---------- IMPORT PACKING LIST ----------
+
+export async function importItemsFromJson(batchId, jsonData) {
+  const db = await getDb();
+  const data = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
+
+  let summaryKey = '\u7e3d\u8868';
+  let summaryData = data[summaryKey];
+  if (!Array.isArray(summaryData)) {
+    for (const key of Object.keys(data)) {
+      if (Array.isArray(data[key])) {
+        summaryData = data[key];
+        summaryKey = key;
+        break;
+      }
+    }
+  }
+  if (!Array.isArray(summaryData)) {
+    throw new Error('Không tìm thấy dữ liệu sản phẩm trong file JSON.');
+  }
+
+  const itemsMap = {};
+  let po = null;
+
+  for (const row of summaryData) {
+    if (!row || typeof row !== 'object') continue;
+    const ntk = row.Column4;
+    const qty = row.Column6;
+    const col10 = row.Column10;
+
+    if (ntk && typeof ntk === 'string' && /^[0-9A-Za-z]+$/.test(ntk)
+        && qty !== undefined && typeof qty === 'number' && qty > 0) {
+      if (!itemsMap[ntk]) {
+        itemsMap[ntk] = { qty: 0 };
+      }
+      itemsMap[ntk].qty += qty;
+    }
+    if (col10 !== undefined && typeof col10 === 'number' && po === null) {
+      po = String(col10);
+    }
+  }
+
+  const count = Object.keys(itemsMap).length;
+  if (count === 0) {
+    throw new Error('Không tìm thấy mã hàng nào trong file JSON.');
+  }
+
+  let imported = 0;
+  await db.withTransactionAsync(async () => {
+    for (const ntk of Object.keys(itemsMap)) {
+      await db.runAsync(
+        `INSERT OR REPLACE INTO items (ntk, po, target, order_batch_id) VALUES (?, ?, ?, ?)`,
+        [ntk, po || '', itemsMap[ntk].qty, batchId]
+      );
+      imported++;
+    }
+    const total = await db.getFirstAsync(
+      `SELECT SUM(target) as total FROM items WHERE order_batch_id = ?`,
+      [batchId]
+    );
+    await db.runAsync(
+      `UPDATE order_batches SET total_target = ? WHERE id = ?`,
+      [total?.total || 0, batchId]
+    );
+  });
+
+  return { imported, totalItems: count };
+}
+
+// ---------- CONTAINER DATA ----------
+
+export async function fetchContainerData(batchId) {
+  const db = await getDb();
+  const row = await db.getFirstAsync(
+    `SELECT data FROM container_data WHERE batch_id = ?`,
+    [batchId]
+  );
+  if (!row || !row.data) return null;
+  try {
+    return JSON.parse(row.data);
+  } catch {
+    return null;
+  }
+}
+
+function parsePackingListContainers(data) {
+  const dataObj = typeof data === 'string' ? JSON.parse(data) : data;
+
+  const summaryKey = '\u7e3d\u8868';
+  const summaryData = dataObj[summaryKey];
+
+  const palletItems = {};
+  let po = null;
+
+  if (Array.isArray(summaryData)) {
+    for (const row of summaryData) {
+      if (!row || typeof row !== 'object') continue;
+      const palletNo = row.Column2;
+      const ntk = row.Column4;
+      const qty = row.Column6;
+      const col10 = row.Column10;
+
+      if (palletNo !== undefined && typeof palletNo === 'number' &&
+          ntk && typeof ntk === 'string' && /^[0-9A-Za-z]+$/.test(ntk) &&
+          qty !== undefined && typeof qty === 'number' && qty > 0) {
+        if (!palletItems[palletNo]) palletItems[palletNo] = [];
+        palletItems[palletNo].push({ ntk, qty });
+      }
+      if (col10 !== undefined && typeof col10 === 'number' && po === null) {
+        po = String(col10);
+      }
+    }
+  }
+
+  const containerKeys = Object.keys(dataObj).filter(
+    k => k !== summaryKey && Array.isArray(dataObj[k])
+  );
+
+  const containers = [];
+  for (const ckey of containerKeys) {
+    const containerRows = dataObj[ckey];
+    let palletRange = null;
+
+    for (const row of containerRows) {
+      if (!row || typeof row !== 'object') continue;
+      const col1 = row.Column1;
+      if (col1 && typeof col1 === 'string' && col1.includes('Pallet')) {
+        const match = col1.match(/Pallet\s+(\d+)-(\d+)/);
+        if (match) {
+          palletRange = { start: parseInt(match[1]), end: parseInt(match[2]) };
+        }
+      }
+    }
+
+    if (palletRange) {
+      const pallets = [];
+      for (let p = palletRange.start; p <= palletRange.end; p++) {
+        const items = palletItems[p] || [];
+        if (items.length > 0) {
+          pallets.push({ no: p, items });
+        }
+      }
+      if (pallets.length > 0) {
+        containers.push({
+          id: ckey,
+          label: `Container ${containers.length + 1}`,
+          po: po || '',
+          pallets
+        });
+      }
+    }
+  }
+
+  return containers;
+}
+
+export async function importContainerData(batchId, jsonData) {
+  const db = await getDb();
+  const containers = parsePackingListContainers(jsonData);
+
+  if (containers.length === 0) {
+    throw new Error('Không tìm thấy dữ liệu container trong file JSON.');
+  }
+
+  const palletsTotal = containers.reduce((s, c) => s + c.pallets.length, 0);
+  const now = new Date().toISOString().slice(0, 10);
+  const containerJson = JSON.stringify(containers);
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO container_data (batch_id, data, created_at) VALUES (?, ?, ?)`,
+      [batchId, containerJson, now]
+    );
+    await db.runAsync(
+      `UPDATE order_batches SET pallets_total = ? WHERE id = ?`,
+      [palletsTotal, batchId]
+    );
+  });
+
+  return { containers: containers.length, pallets: palletsTotal };
 }

@@ -9,16 +9,19 @@ import FilterChips from '@/components/FilterChips';
 
 export default function HistoryScreen() {
   const theme = getTheme(useColorScheme());
-  const { historyGroup, historyFilterValue, setHistoryGroup } = useAppStore();
+  const { historyGroup, historyFilterValue, setHistoryGroup, dataVersion } = useAppStore();
   const [groups, setGroups] = useState([]);
   const [details, setDetails] = useState({});
   const [expanded, setExpanded] = useState(new Set());
 
+  // reset state when filter or dataVersion changes (intentional)
   useEffect(() => {
     fetchHistoryGrouped(historyGroup, historyFilterValue).then(setGroups);
+    /* eslint-disable react-hooks/set-state-in-effect */
     setExpanded(new Set());
     setDetails({});
-  }, [historyGroup, historyFilterValue]);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [historyGroup, historyFilterValue, dataVersion]);
 
   async function toggleGroup(groupKey) {
     const next = new Set(expanded);

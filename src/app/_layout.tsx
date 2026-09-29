@@ -12,7 +12,7 @@ export default function RootLayout() {
   const init = useAppStore(s => s.init);
   const ready = useAppStore(s => s.ready);
 
-  useEffect(() => { init(); }, []);
+  useEffect(() => { init(); }, [init]);
 
   if (!ready) {
     return (

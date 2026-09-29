@@ -10,6 +10,7 @@ export const useAppStore = create((set, get) => ({
   items: [],
   palletDoneMap: {},
   archives: [],
+  containerData: null,
 
   activeFilter: 'all',
   activeStatusFilter: 'all',
@@ -17,6 +18,9 @@ export const useAppStore = create((set, get) => ({
   searchQuery: '',
   historyGroup: 'day',
   historyFilterValue: '',
+  dataVersion: 0,
+  importStatus: 'idle',
+  importResult: null,
 
   init: async () => {
     const db = await getDb();
@@ -24,7 +28,8 @@ export const useAppStore = create((set, get) => ({
     const items = await q.fetchItemsWithStats(batchId);
     const palletDoneMap = await q.fetchPalletStatus(batchId);
     const archives = await q.fetchArchives();
-    set({ ready: true, batchId, items, palletDoneMap, archives });
+    const containerData = await q.fetchContainerData(batchId);
+    set({ ready: true, batchId, items, palletDoneMap, archives, containerData });
   },
 
   refreshItems: async () => {
@@ -37,16 +42,19 @@ export const useAppStore = create((set, get) => ({
     const { batchId } = get();
     await q.addEntry(batchId, ntk, payload);
     await get().refreshItems();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
   },
 
   updateEntry: async (entryId, payload) => {
     await q.updateEntry(entryId, payload);
     await get().refreshItems();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
   },
 
   removeEntry: async (entryId) => {
     await q.removeEntry(entryId);
     await get().refreshItems();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
   },
 
   togglePallet: async (key, currentlyDone) => {
@@ -57,10 +65,47 @@ export const useAppStore = create((set, get) => ({
   },
 
   finishOrder: async () => {
-    const newBatchId = await q.finishOrder();
+    const { containerData } = get();
+    const newBatchId = await q.finishOrder(containerData);
     const items = await q.fetchItemsWithStats(newBatchId);
     const archives = await q.fetchArchives();
-    set({ batchId: newBatchId, items, palletDoneMap: {}, archives });
+    set({ batchId: newBatchId, items, palletDoneMap: {}, archives, containerData: null });
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+  },
+
+  importFromJson: async (jsonData) => {
+    set({ importStatus: 'loading', importResult: null });
+    const { batchId } = get();
+    try {
+      const parsed = JSON.parse(jsonData);
+
+      let result;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        if (parsed.entries) {
+          result = await q.importEntriesFromJson(batchId, parsed.entries);
+        } else if (parsed['\u7e3d\u8868'] || Object.keys(parsed).some(k => Array.isArray(parsed[k]))) {
+          result = await q.importItemsFromJson(batchId, parsed);
+          const containerRes = await q.importContainerData(batchId, parsed);
+          const containerData = await q.fetchContainerData(batchId);
+          set({ containerData });
+          result = { ...result, ...containerRes };
+        } else {
+          result = await q.importEntriesFromJson(batchId, parsed);
+        }
+      } else if (Array.isArray(parsed)) {
+        result = await q.importEntriesFromJson(batchId, parsed);
+      } else {
+        throw new Error('Định dạng JSON không hợp lệ.');
+      }
+
+      await get().refreshItems();
+      set((s) => ({ dataVersion: s.dataVersion + 1 }));
+      set({ importStatus: 'success', importResult: result });
+      return result;
+    } catch (e) {
+      set({ importStatus: 'error', importResult: null });
+      throw e;
+    }
   },
 
   setFilter: (v) => set({ activeFilter: v }),

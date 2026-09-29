@@ -1,0 +1,11 @@
+{
+  "format": "production-tracker-v1",
+  "description": "File JSON mẫu để test tính năng Import JSON (FEAT-08)",
+  "entries": [
+    { "ntk": "106160", "date": "2026-09-28", "qty": 500, "line": "manual", "defect_qty": 3, "defect_types": ["yellow"] },
+    { "ntk": "106160", "date": "2026-09-28", "qty": 200, "line": "auto", "defect_qty": 0, "defect_types": [] },
+    { "ntk": "1063051", "date": "2026-09-27", "qty": 340, "line": "manual", "defect_qty": 2, "defect_types": ["yellow", "red"] },
+    { "ntk": "999999", "date": "2026-09-28", "qty": 100, "line": "manual", "defect_qty": 0, "defect_types": [] },
+    { "ntk": "106160", "date": "2026-09-28", "qty": 0, "line": "manual", "defect_qty": 0, "defect_types": [] }
+  ]
+}
