@@ -113,5 +113,70 @@
 
 ---
 
+## Chia SPEC.md thành module (SPECS)
+
+> Mục tiêu: Split SPEC.md (708 dòng) thành 8 file module trong `specs/` để AI agent dễ tra cứu.
+
+### Checklist
+
+- [x] Tạo `specs/SPEC-rules.md` (§0.1-0.3, §4.2, §8, §10.1, §10.4)
+- [x] Tạo `specs/SPEC-api.md` (§6.1-6.5)
+- [x] Tạo `specs/SPEC-acceptance.md` (§7.1-7.5)
+- [x] Tạo `specs/SPEC-data.md` (§5.1-5.3, §10.1-10.2)
+- [x] Tạo `specs/SPEC-test.md` (§11.1-11.2)
+- [x] Tạo `specs/SPEC-reference.md` (§1, §2, §3, §4.1, §9, §12, §13.2, §14)
+- [x] Tạo `specs/SPEC-changelog.md` (§15)
+- [x] Tạo `specs/SPEC-template.md` (§13)
+- [x] Chuyển SPEC.md (root) thành trang chủ/index
+- [x] Cập nhật AGENTS.md trỏ tới module files
+
+---
+
+## FEAT-01: Form sửa nhật ký (Edit entry form)
+
+> Phạm vi: Cấp 1 (thêm UI, không đổi schema hay signature).
+> Nút "Sửa" đã có ở `EntryLogRow`; `editingId` state + `onUpdateEntry` props đã sẵn sàng. Chỉ cần thêm form inline.
+> Tham chiếu: `SPEC-acceptance.md` §7.1 (AC-ITEM-11), `SPEC-api.md` §6 (updateEntry), `SPEC-data.md` §5.1 (entries table)
+
+### Bước 13.1: Cập nhật spec (CHƯA SỬA CODE)
+- [x] Cập nhật AC-ITEM-11 trong `SPEC-acceptance.md`: 🟡 → ✅ với chi tiết hành vi (form inline, validate, confirm, BUG-04 fix)
+- [x] Cập nhật `SPEC-data.md`: ghi chú `updateEntry` đã hỗ trợ sửa entry (không cần migration)
+- [x] Cập nhật `SPEC-api.md`: `ItemCard.onUpdateEntry` props đã tồn tại, chỉ cần dùng
+- [x] Cập nhật `SPEC-reference.md` §12.2 backlog: FEAT-01 → "Đã cài đặt"
+
+### Bước 13.2: Thêm edit form trong ItemCard (src/components/ItemCard.js — 🔒 thêm UI)
+- [x] Khi `editingId === entry.id`: render inline form cùng layout với "Thêm" (qty, line picker, defectQty, defect type chips)
+- [x] Pre-fill từ entry: `qty = entry.qty`, `line = entry.line`, `defectQty = entry.defect_qty`, `defectTypes` từ `entry.defect_types` (parse comma-string → object)
+- [x] BUG-04 fix: chỉ gửi `defectTypes` khi `defectQty > 0` (defect_types join('') nếu defectQty=0)
+- [x] Validate theo AC-ITEM-05: `qty ≤ 0 && defectQty ≤ 0` → không lưu
+- [x] Save: Alert.confirm (INV-U1) → `onUpdateEntry(editingId, {date, qty, line, defectQty, defectTypes})` → `setEditingId(null)` → `loadEntries()`
+- [x] Cancel: `setEditingId(null)`, discard changes
+
+### Bước 13.3: Kiểm tra EntryLogRow (src/components/EntryLogRow.js — 🟢, đã có nút)
+- [x] Nút "Sửa" đã có `onEdit` — không cần thay đổi
+- [x] Nút "Xoá" đã có `onDelete` + Alert xác nhận — không thay đổi
+
+### Bước 13.4: Verify data flow
+- [x] ItemsScreen.js: đã truyền `onUpdateEntry={updateEntry}` ✓ (line 60)
+- [x] Store `updateEntry`: gọi `q.updateEntry`, refresh, tăng `dataVersion` ✓
+- [x] Query `updateEntry`: `UPDATE entries SET date, qty, line, defect_qty, defect_types WHERE id=?` ✓
+
+### Bước 13.5: Breaking changes check
+- [x] Không thêm bảng/cột (schema không đổi)
+- [x] Không đổi signature hàm queries.js/store
+- [x] `onUpdateEntry` props ItemCard đã tồn tại → chỉ dùng, không thêm
+- [x] Form inline chỉ xuất hiện khi `editingId` set → không ảnh hưởng UI hiện tại
+- [x] INV-B2: chỉ sửa entry của batch active (EntryLogRow fetch theo batchId)
+
+### Bước 13.6: Lint + Typecheck + Regression
+- [x] `npx expo lint` — 0 lỗi mới
+- [x] `npx tsc --noEmit` — 0 lỗi mới
+- [x] `npx expo start -c` — khởi động OK
+- [ ] RC-02: Thêm entry mới → sửa entry → số liệu cập nhật đúng
+- [ ] RC-IMP-04: Sửa entry → sang Lịch sử → data cập nhật (dataVersion)
+- [ ] AC-ITEM-05 verify: qty=0 && defectQty=0 → không lưu
+
+---
+
 ## Các task tiếp theo
-- FEAT-01: Form sửa nhật ký (pending spec approval)
+- FEAT-02: Lọc lịch sử theo ngày/tháng/năm

@@ -64,7 +64,7 @@
 
 ## 8. Kế hoạch kiểm thử
 - RC nào phải chạy lại: RC-01, RC-02, RC-05, RC-15, RC-17, RC-20
-- RC mới: RC-IMP-01..04 (xem SPEC.md §7.5)
+- RC mới: RC-IMP-01..04 (xem `specs/SPEC-acceptance.md` §7.5)
 
 ## 9. Tiêu chí xong
 - [x] `npx expo lint` — 0 lỗi mới

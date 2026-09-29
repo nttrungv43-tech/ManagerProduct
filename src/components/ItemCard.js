@@ -17,9 +17,12 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
   const [defectTypes, setDefectTypes] = useState({ yellow: false, red: false, tear: false });
   const [logOpen, setLogOpen] = useState(false);
   const [entries, setEntries] = useState([]);
-  // planned FEAT-01: editingId dùng cho form sửa nhật ký
-  // eslint-disable-next-line no-unused-vars
   const [editingId, setEditingId] = useState(null);
+  const [editDate, setEditDate] = useState('');
+  const [editQty, setEditQty] = useState('');
+  const [editLine, setEditLine] = useState('manual');
+  const [editDefectQty, setEditDefectQty] = useState('');
+  const [editDefectTypes, setEditDefectTypes] = useState({ yellow: false, red: false, tear: false });
 
   const produced = item.produced || 0;
   const remaining = Math.max(item.target - produced, 0);
@@ -55,6 +58,55 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
     Alert.alert('Xác nhận', 'Bạn có chắc muốn xoá mục này không?', [
       { text: 'Huỷ', style: 'cancel' },
       { text: 'Xoá', style: 'destructive', onPress: async () => { await onDeleteEntry(entryId); loadEntries(); } },
+    ]);
+  }
+
+  function handleEdit(entry) {
+    setEditingId(entry.id);
+    setEditDate(entry.date || '');
+    setEditQty(String(entry.qty || 0));
+    setEditLine(entry.line || 'manual');
+    setEditDefectQty(String(entry.defect_qty || 0));
+    const types = { yellow: false, red: false, tear: false };
+    (entry.defect_types || '').split(',').filter(Boolean).forEach(t => {
+      if (types.hasOwnProperty(t)) types[t] = true;
+    });
+    setEditDefectTypes(types);
+  }
+
+  function handleEditCancel() {
+    setEditingId(null);
+    setEditDate('');
+    setEditQty('');
+    setEditDefectQty('');
+    setEditDefectTypes({ yellow: false, red: false, tear: false });
+  }
+
+  async function handleEditSave() {
+    const q = parseFloat(editQty) || 0;
+    const dq = parseFloat(editDefectQty) || 0;
+    if (q <= 0 && dq <= 0) {
+      handleEditCancel();
+      return;
+    }
+    const types = Object.keys(editDefectTypes).filter(k => editDefectTypes[k]);
+    const payload = {
+      date: editDate,
+      qty: q,
+      line: editLine,
+      defectQty: dq,
+      defectTypes: dq > 0 ? types : [],
+    };
+    Alert.alert('Xác nhận', 'Lưu thay đổi cho nhật ký này?', [
+      { text: 'Huỷ', style: 'cancel' },
+      {
+        text: 'Lưu',
+        onPress: async () => {
+          await onUpdateEntry(editingId, payload);
+          handleEditCancel();
+          loadEntries();
+        },
+      },
     ]);
   }
 
@@ -132,15 +184,68 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
               {entries.length === 0 ? (
                 <Text style={{ color: theme.sub, fontSize: 12, paddingVertical: 8 }}>Chưa có mục nào</Text>
               ) : (
-                entries.map(e => (
-                  <EntryLogRow
-                    key={e.id}
-                    entry={e}
-                    theme={theme}
-                    onDelete={() => confirmDelete(e.id)}
-                    onEdit={() => setEditingId(e.id)}
-                  />
-                ))
+                entries.map(e => {
+                  if (editingId === e.id) {
+                    return (
+                      <View key={`edit-${e.id}`} style={{ marginTop: 8, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.line }}>
+                        <Text style={styles.sectionLabel(theme)}>Sửa nhật ký</Text>
+                        <TextInput
+                          style={styles.input(theme)}
+                          keyboardType="numeric"
+                          placeholder="Số lượng sản xuất"
+                          placeholderTextColor={theme.sub}
+                          value={editQty}
+                          onChangeText={setEditQty}
+                        />
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                          <View style={[styles.pickerWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
+                            <Picker selectedValue={editLine} onValueChange={setEditLine} style={{ color: theme.ink }}>
+                              <Picker.Item label="Thủ công" value="manual" />
+                              <Picker.Item label="Tự động" value="auto" />
+                            </Picker>
+                          </View>
+                        </View>
+                        <Text style={styles.sectionLabel(theme)}>Hàng lỗi (không bắt buộc)</Text>
+                        <TextInput
+                          style={styles.input(theme)}
+                          keyboardType="numeric"
+                          placeholder="Số lượng hàng lỗi"
+                          placeholderTextColor={theme.sub}
+                          value={editDefectQty}
+                          onChangeText={setEditDefectQty}
+                        />
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                          {[['yellow', 'Thẻ vàng'], ['red', 'Thẻ đỏ'], ['tear', 'Rách bọc']].map(([key, label]) => (
+                            <TouchableOpacity
+                              key={key}
+                              style={[styles.defectChip, { borderColor: theme.line, backgroundColor: editDefectTypes[key] ? theme.accent : theme.card }]}
+                              onPress={() => setEditDefectTypes(prev => ({ ...prev, [key]: !prev[key] }))}
+                            >
+                              <Text style={{ color: editDefectTypes[key] ? '#fff' : theme.sub, fontSize: 12.5 }}>{label}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+                          <TouchableOpacity style={[styles.addBtn, { backgroundColor: theme.good }]} onPress={handleEditSave}>
+                            <Text style={{ color: '#fff', fontWeight: '700' }}>Lưu</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={[styles.addBtn, { backgroundColor: theme.sub }]} onPress={handleEditCancel}>
+                            <Text style={{ color: '#fff', fontWeight: '700' }}>Huỷ</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
+                  }
+                  return (
+                    <EntryLogRow
+                      key={e.id}
+                      entry={e}
+                      theme={theme}
+                      onDelete={() => confirmDelete(e.id)}
+                      onEdit={() => handleEdit(e)}
+                    />
+                  );
+                })
               )}
             </View>
           )}
