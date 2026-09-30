@@ -1,6 +1,7 @@
 // src/db/queries.js
 import { getDb, getActiveBatchId } from './index';
 import { containersData, seedItems } from '@/data/seed';
+import { checkQtyLimit } from '@/utils/validateQty';
 
 // ---------- ITEMS ----------
 
@@ -33,21 +34,64 @@ export async function fetchEntriesForItem(batchId, ntk) {
   );
 }
 
+// ---------- ENTRIES: kiểm tra hạn mức đơn đặt hàng (FEAT-09, INV-V1) ----------
+
+/**
+ * Hạn mức (items.target) và số lượng đã sản xuất (SUM(entries.qty)) của một mã hàng.
+ * `excludeEntryId`: bỏ qua dòng đang sửa để tính "đã làm" như thể nó chưa tồn tại.
+ */
+export async function getItemTargetUsage(batchId, ntk, excludeEntryId = null) {
+  const db = await getDb();
+  const item = await db.getFirstAsync(
+    `SELECT target FROM items WHERE ntk = ? AND order_batch_id = ?`,
+    [ntk, batchId]
+  );
+  const target = item?.target ?? 0;
+
+  let sql = `SELECT COALESCE(SUM(qty), 0) as produced
+             FROM entries WHERE ntk = ? AND order_batch_id = ?`;
+  const params = [ntk, batchId];
+  if (excludeEntryId !== null && excludeEntryId !== undefined) {
+    sql += ` AND id != ?`;
+    params.push(excludeEntryId);
+  }
+  const row = await db.getFirstAsync(sql, params);
+  const produced = row?.produced || 0;
+  const hasLimit = target > 0;
+  return { target, produced, remaining: hasLimit ? Math.max(target - produced, 0) : 0, hasLimit };
+}
+
 export async function addEntry(batchId, ntk, { date, qty, line, defectQty, defectTypes }) {
   const db = await getDb();
+  const usage = await getItemTargetUsage(batchId, ntk);
+  const check = checkQtyLimit({ ...usage, incomingQty: qty });
+  if (!check.ok) return { ok: false, error: check };
+
   await db.runAsync(
     `INSERT INTO entries (ntk, order_batch_id, date, qty, line, defect_qty, defect_types)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [ntk, batchId, date, qty, line || 'manual', defectQty || 0, (defectTypes || []).join(',')]
   );
+  return { ok: true };
 }
 
 export async function updateEntry(entryId, { date, qty, line, defectQty, defectTypes }) {
   const db = await getDb();
+  const current = await db.getFirstAsync(
+    `SELECT ntk, order_batch_id FROM entries WHERE id = ?`,
+    [entryId]
+  );
+  if (!current) return { ok: false, error: { ok: false, code: 'ENTRY_NOT_FOUND' } };
+
+  const usage = await getItemTargetUsage(current.order_batch_id, current.ntk, entryId);
+  const check = checkQtyLimit({ ...usage, incomingQty: qty });
+  if (!check.ok) return { ok: false, error: check };
+
   await db.runAsync(
     `UPDATE entries SET date = ?, qty = ?, line = ?, defect_qty = ?, defect_types = ? WHERE id = ?`,
-    [date, qty, line, defectQty || 0, (defectTypes || []).join(','), entryId]
+    [date, qty, line || 'manual', defectQty || 0, (defectTypes || []).join(','), entryId]
   );
+  return { ok: true };
 }
 
 export async function removeEntry(entryId) {
@@ -232,8 +276,25 @@ export async function importEntriesFromJson(batchId, entries) {
   const db = await getDb();
   let imported = 0;
   let skipped = 0;
+  let skippedOver = 0;
 
   await db.withTransactionAsync(async () => {
+    // FEAT-09: hạn mức + số lượng đã có, nạp 1 lần để kiểm tra tích luỹ trong transaction.
+    // Dùng Map: ntk từ file JSON không kiểm soát được, tránh trùng key của Object.prototype.
+    const usageMap = new Map();
+    const targetRows = await db.getAllAsync(
+      `SELECT ntk, target FROM items WHERE order_batch_id = ?`, [batchId]
+    );
+    targetRows.forEach(r => usageMap.set(r.ntk, { target: r.target, produced: 0, hasLimit: r.target > 0 }));
+    const producedRows = await db.getAllAsync(
+      `SELECT ntk, COALESCE(SUM(qty), 0) as produced
+       FROM entries WHERE order_batch_id = ? GROUP BY ntk`, [batchId]
+    );
+    producedRows.forEach(r => {
+      const u = usageMap.get(r.ntk);
+      if (u) u.produced = r.produced;
+    });
+
     for (const entry of entries) {
       const { ntk, date, qty, line, defectQty, defectTypes } = entry;
       const q = parseFloat(qty) || 0;
@@ -244,14 +305,18 @@ export async function importEntriesFromJson(batchId, entries) {
         continue;
       }
 
-      const item = await db.getFirstAsync(
-        `SELECT ntk FROM items WHERE ntk = ? AND order_batch_id = ?`,
-        [ntk, batchId]
-      );
-      if (!item) {
+      const usage = usageMap.get(ntk);
+      if (!usage) {
         skipped++;
         continue;
       }
+
+      const check = checkQtyLimit({ ...usage, incomingQty: q });
+      if (!check.ok) {
+        skippedOver++;
+        continue;
+      }
+      usage.produced = usage.produced + q;
 
       await db.runAsync(
         `INSERT INTO entries (ntk, order_batch_id, date, qty, line, defect_qty, defect_types)
@@ -262,7 +327,7 @@ export async function importEntriesFromJson(batchId, entries) {
     }
   });
 
-  return { imported, skipped };
+  return { imported, skipped, skippedOver };
 }
 
 // ---------- IMPORT PACKING LIST ----------

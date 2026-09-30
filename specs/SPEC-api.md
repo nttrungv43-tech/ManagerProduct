@@ -21,8 +21,8 @@
 |---|---|---|
 | `fetchItemsWithStats(batchId)` | | `[{ntk, po, target, order_batch_id, produced, defect}]` sắp theo `ntk` |
 | `fetchEntriesForItem(batchId, ntk)` | | Mảng dòng `entries`, mới nhất trước (`ORDER BY id DESC`) |
-| `addEntry(batchId, ntk, {date, qty, line, defectQty, defectTypes[]})` | | `INSERT`; `defectTypes` được `join(',')` |
-| `updateEntry(entryId, {date, qty, line, defectQty, defectTypes[]})` | | `UPDATE` một dòng |
+| `addEntry(batchId, ntk, {date, qty, line, defectQty, defectTypes[]})` | | `INSERT`; `defectTypes` được `join(',')`. **FEAT-09:** trả `{ok:true}` hoặc `{ok:false, error}` nếu vượt `items.target` |
+| `updateEntry(entryId, {date, qty, line, defectQty, defectTypes[]})` | | `UPDATE` một dòng. **FEAT-09:** trả `{ok:true}` hoặc `{ok:false, error}` nếu vượt `items.target` |
 | `removeEntry(entryId)` | | `DELETE` một dòng |
 | `fetchPalletStatus(batchId)` | | `{ [key]: boolean }` |
 | `setPalletStatus(batchId, key, done)` | | Upsert trạng thái |
@@ -38,7 +38,20 @@
 | `fetchArchiveItems(batchId)` | | `[{ntk,target,produced,defect}]` |
 | `importItemsFromJson(batchId, jsonData)` | packing list JSON | INSERT OR REPLACE items; cập nhật `total_target`; trả `{imported, totalItems}` |
 | `importEntriesFromJson(batchId, entries)` | `Array<{ntk,date,qty,line?,defectQty?,defectTypes?}>` | Bulk INSERT; bỏ qua nếu `ntk` không tồn tại hoặc `qty≤0 && defectQty≤0`; trả `{imported, skipped}` |
+| **`getItemTargetUsage(batchId, ntk, excludeEntryId?)`** | (FEAT-09, hàm mới) | `{target, produced, remaining, hasLimit}`; `produced = SUM(entries.qty)` trong batch, **đã trừ** `excludeEntryId` nếu có. `hasLimit = target > 0` |
 | `finishOrder(containers?)` | (tuỳ chọn: `containersData[]`) | Lưu batch, tạo batch mới, trả `newBatchId`. `containers` dùng cho pallet stats; fallback seed. Batch mới luôn dùng seed. |
+
+---
+
+## §6.2.1 `src/utils/validateQty.js` (FEAT-09 — hàm thuần, 🟢 file mới)
+
+> Không phụ thuộc DB/React. Dùng chung cho UI và unit test (`SPEC-test.md` §11.2).
+
+| Hàm | Tham số | Trả về |
+|---|---|---|
+| `parseQty(raw)` | chuỗi/số | `number` (số nguyên ≥ 0) hoặc `null` nếu không hợp lệ. Chuẩn hoá: bỏ khoảng trắng, coi `.` và ` ` là phân tách nghìn |
+| `checkQtyLimit({target, produced, incomingQty, hasLimit})` | | `{ok:true}` hoặc `{ok:false, code:'OVER_TARGET', target, produced, incomingQty, remaining, overBy}`. `hasLimit=false` ⇒ luôn `{ok:true}` |
+| `formatQtyError(result, ntk)` | | Chuỗi tiếng Việt cho `Alert` |
 
 ---
 
@@ -49,6 +62,7 @@
 **Action (async):** `init()`, `refreshItems()`, `addEntry(ntk, payload)`, `updateEntry(entryId, payload)`, `removeEntry(entryId)`, `togglePallet(key, currentlyDone)`, `finishOrder()`, `importFromJson(jsonData)`.
 
 - `init()`: fetch `items` + `palletDoneMap` + `archives` + `containerData` từ DB
+- `addEntry(ntk, payload)` / `updateEntry(entryId, payload)`: **FEAT-09** trả về `{ok, error?}` (trước là `undefined`). Tên và tham số **không đổi**; chỉ thêm giá trị trả về ⇒ caller cũ bỏ qua kết quả vẫn chạy đúng
 - `finishOrder()`: gọi `q.finishOrder(state.containerData)`, reset `containerData: null`
 - `importFromJson`: detect format → `entries` → `importEntriesFromJson`; `packingList` → `importItemsFromJson` + `importContainerData` + refresh `containerData`
 
@@ -68,7 +82,7 @@
 | `FilterChips` | `{options, activeValue, onSelect, theme}` | |
 | `SummaryCards` | `{totals:{...}, theme}` | |
 | `EntryLogRow` | `{entry, onEdit, onDelete, theme}` | |
-| `ItemCard` | `{item, theme, onAddEntry, onUpdateEntry, onDeleteEntry}` | Cần `item.order_batch_id` |
+| `ItemCard` | `{item, theme, onAddEntry, onUpdateEntry, onDeleteEntry}` | Cần `item.order_batch_id`. **FEAT-09: không thêm prop** — hạn mức đã có sẵn trong `item.target`/`item.produced`; `onAddEntry`/`onUpdateEntry` trả `{ok, error?}` để component hiện Alert |
 | `PalletRow` | `{containerId, pallet, palletDoneMap, onTogglePallet, theme}` | |
 | `ArchiveCard` | `{archive, theme}` | |
 | `ImportJsonButton` | `{onImport, theme}` | Detect format, Alert xác nhận + kết quả |

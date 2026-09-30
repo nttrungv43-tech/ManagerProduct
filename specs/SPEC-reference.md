@@ -104,6 +104,7 @@ src/
 │       └── history.tsx        → HistoryScreen
 ├── theme.js                   token màu
 ├── data/seed.js               seedItems, containersData
+├── utils/                     hàm thuần dùng chung (🟢: validateQty.js — FEAT-09)
 ├── db/
 │   ├── index.js               getDb(), getActiveBatchId(), ensureActiveBatch()
 │   ├── schema.js              CREATE_TABLES_SQL
@@ -132,14 +133,14 @@ src/
 | **UX-01** | 🟢 P3 | HistoryScreen `onTouchEnd` unreliable | Đổi `TouchableOpacity`/`Pressable` |
 | **DEBT-01** | 🟢 P3 | WAL trong `CREATE_TABLES_SQL` | Chạy WAL riêng trong `getDb()` |
 | **DEBT-02** | 🟡 P3 | `containersData` cứng trong code | ✅ Đang giải quyết: FEAT-08 phase 2 thêm `container_data` |
-| **DEBT-03** | 🟢 P3 | Chưa có test tự động | Xem §11.2 |
+| **DEBT-03** | 🟢 P3 | Chưa có test tự động | 🟡 Một phần: unit test hàm thuần chạy bằng `npm test` (`scripts/test-validateQty.mjs`, FEAT-09). Chưa có `jest-expo`; xem §11.2 |
 
 ---
 
 ## §12. Registry & Backlog
 
 ### §12.1 Đã cài đặt
-`F-ITEMS` · `F-CONT` · `F-HIST` · `F-APP` · `F-IMPORT` · `FEAT-01` (form sửa nhật ký inline)
+`F-ITEMS` · `F-CONT` · `F-HIST` · `F-APP` · `F-IMPORT` · `FEAT-01` (form sửa nhật ký inline) · `FEAT-09` (hạn mức đơn đặt hàng + validate số)
 
 ### §12.2 Backlog
 | ID | Ưu tiên | Cấp | Tính năng | Ràng buộc |

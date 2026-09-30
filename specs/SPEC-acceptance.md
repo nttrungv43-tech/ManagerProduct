@@ -25,6 +25,9 @@
 | AC-ITEM-13 | ✅ | **Lọc PO:** chip "Tất cả PO" + từng PO (tách `po` theo `+`). Mã hàng khớp nếu `po.split('+')` chứa PO đang chọn |
 | AC-ITEM-14 | ✅ | **Lọc trạng thái:** `Tất cả` / `Chưa hoàn thành` / `Đã xong` (`target > 0 && produced ≥ target`) |
 | AC-ITEM-15 | ✅ | Ba bộ lọc kết hợp **AND**. Không có kết quả → "Không tìm thấy mã hàng nào." |
+| AC-ITEM-17 | ✅ | **Hạn mức đơn đặt hàng (FEAT-09):** nếu `items.target > 0` thì `SUM(entries.qty)` của mã hàng trong batch `active` **không được vượt** `target`. Thêm nhật ký: nếu `đã làm + qty > target` → `Alert` "Vượt đơn đặt hàng" (nêu `target`, `đã làm`, `còn nhập tối đa`, `vượt`), **không ghi DB**, **không xoá ô nhập** |
+| AC-ITEM-18 | ✅ | **Sửa vượt hạn mức (FEAT-09):** tính `đã làm − qtyCũ + qtyMới > target` → `Alert`, **không lưu**, form sửa **vẫn mở**. Sửa làm **giảm** `qty` luôn được phép, kể cả khi `đã làm = target` |
+| AC-ITEM-19 | ✅ | **Giá trị số không hợp lệ (FEAT-09):** `''`, `'abc'`, `'12abc'`, âm, số thực, ký hiệu khoa học → **không ghi DB**. Chuẩn hoá `' 120 '`/`'1.200'`/`'1 200'` → `1200`. Ô trống vẫn giữ hành vi im lặng của AC-ITEM-05 |
 
 ---
 
@@ -85,3 +88,4 @@
 | AC-IMP-10 | 🟡 | Packing list → import **container/pallet structure** (`container_data`); `ContainersScreen` hiển thị ngay |
 | AC-IMP-11 | 🟡 | `pallets_total` batch = tổng pallets từ `container_data` (fallback 26 từ seed) |
 | AC-IMP-12 | 🟡 | Sau `finishOrder` → archived giữ `container_data`; batch mới reset → fallback seed |
+| AC-IMP-13 | ✅ | **Import vượt hạn mức (FEAT-09):** kiểm tra **tích luỹ** theo thứ tự file; entry làm `đã làm + qty > target` → **bỏ qua**, đếm vào `skippedOver`; `Alert` kết quả báo rõ số mục bị bỏ qua. `ntk` không tồn tại vẫn tính vào `skipped` (không phải `skippedOver`) |

@@ -6,6 +6,10 @@ import ProgressBar from '@/components/ProgressBar';
 import EntryLogRow from '@/components/EntryLogRow';
 import { pctClass } from '@/store/useAppStore';
 import { fetchEntriesForItem } from '@/db/queries';
+import {
+  parseQty, formatQtyError,
+  INVALID_QTY_TITLE, INVALID_QTY_MESSAGE, OVER_TARGET_TITLE,
+} from '@/utils/validateQty';
 
 const COLOR_BY_CLASS = { ok: 'good', mid: 'warn', low: 'bad' };
 
@@ -40,15 +44,38 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
     setLogOpen(!logOpen);
   }
 
+  // FEAT-09: đọc số lượng từ ô nhập. Ô trống ⇒ 0 (giữ nguyên AC-ITEM-05/RC-04: không lỗi).
+  // Ô có chữ/ký hiệu lạ ⇒ invalid ⇒ báo lỗi, không ghi DB.
+  function readNumber(raw) {
+    if (typeof raw === 'string' && raw.trim() === '') return { value: 0, empty: true, invalid: false };
+    const parsed = parseQty(raw);
+    if (parsed === null) return { value: 0, empty: false, invalid: true };
+    return { value: parsed, empty: false, invalid: false };
+  }
+
+  function showInvalidQty() {
+    Alert.alert(INVALID_QTY_TITLE, INVALID_QTY_MESSAGE);
+  }
+
+  function showOverTarget(error) {
+    Alert.alert(OVER_TARGET_TITLE, formatQtyError(error, item.ntk));
+  }
+
   async function handleAdd() {
-    const q = parseFloat(qty) || 0;
-    const dq = parseFloat(defectQty) || 0;
+    const qRes = readNumber(qty);
+    const dRes = readNumber(defectQty);
+    if (qRes.invalid || dRes.invalid) { showInvalidQty(); return; }
+
+    const q = qRes.value;
+    const dq = dRes.value;
     if (q <= 0 && dq <= 0) return;
     const types = Object.keys(defectTypes).filter(k => defectTypes[k]);
-    await onAddEntry(item.ntk, {
+    const res = await onAddEntry(item.ntk, {
       date: new Date().toISOString().slice(0, 10),
-      qty: q, line, defectQty: dq, defectTypes: types,
+      qty: q, line, defectQty: dq, defectTypes: dq > 0 ? types : [],
     });
+    // Vượt đơn đặt hàng: giữ nguyên ô nhập để người dùng sửa lại.
+    if (res && res.ok === false) { showOverTarget(res.error); return; }
     setQty(''); setDefectQty(''); setDefectTypes({ yellow: false, red: false, tear: false });
     setLogOpen(true);
     loadEntries();
@@ -83,8 +110,12 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
   }
 
   async function handleEditSave() {
-    const q = parseFloat(editQty) || 0;
-    const dq = parseFloat(editDefectQty) || 0;
+    const qRes = readNumber(editQty);
+    const dRes = readNumber(editDefectQty);
+    if (qRes.invalid || dRes.invalid) { showInvalidQty(); return; }
+
+    const q = qRes.value;
+    const dq = dRes.value;
     if (q <= 0 && dq <= 0) {
       handleEditCancel();
       return;
@@ -102,7 +133,9 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
       {
         text: 'Lưu',
         onPress: async () => {
-          await onUpdateEntry(editingId, payload);
+          const res = await onUpdateEntry(editingId, payload);
+          // Vượt hạn mức: giữ form sửa mở để người dùng điều chỉnh (AC-ITEM-18).
+          if (res && res.ok === false) { showOverTarget(res.error); return; }
           handleEditCancel();
           loadEntries();
         },

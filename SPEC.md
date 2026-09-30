@@ -19,7 +19,7 @@
 
 | Mục | Giá trị |
 |---|---|
-| Phiên bản spec | 1.3 (modular) |
+| Phiên bản spec | 1.4 (modular) |
 | Nền tảng | Expo SDK 57 (Expo Router `src/app/`) + `expo-sqlite` + `zustand` |
 | Chế độ | 100% offline, một thiết bị, không server |
 | Ngôn ngữ | Tiếng Việt |
@@ -50,7 +50,10 @@ Xem đầy đủ trong [`SPEC-reference.md`](SPEC-reference.md) §12:
 | F-APP | ✅ |
 | F-IMPORT | ✅ items/entries; 🟡 container/pallet |
 | BUG-01/02/03 | ⏳ P0/P1 (cần chỉ đạo Cấp 3) |
-| FEAT-01..06, FEAT-07 | 📋 Backlog |
+| FEAT-01 | ✅ Form sửa nhật ký |
+| FEAT-08 | ✅ items/entries; 🟡 container/pallet |
+| FEAT-09 | ✅ Hạn mức đơn đặt hàng + validate dữ liệu số |
+| FEAT-02..07 | 📋 Backlog |
 
 ---
 

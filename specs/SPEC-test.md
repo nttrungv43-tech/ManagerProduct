@@ -30,18 +30,41 @@
 | RC-20 | Tắt app, mở lại | Mọi dữ liệu còn nguyên |
 | RC-21 | Chuyển sáng/tối | Đọc rõ, đúng token màu |
 | RC-22 | (Migration) nâng cấp từ DB cũ | Dữ liệu còn nguyên; RC-02..17 vẫn đạt |
+| RC-23 | *(FEAT-09)* Mã `106160` (`target=1000`): nhập `900` → Thêm | Đã làm `900`, `Còn lại 100` |
+| RC-24 | *(FEAT-09)* Nhập `200` → Thêm | Alert "Vượt đơn đặt hàng"; Đã làm vẫn `900`; ô nhập **còn nguyên** `200` |
+| RC-25 | *(FEAT-09)* Sửa ô thành `100` → Thêm | Đã làm `1000`, `Còn lại 0`, `100%` |
+| RC-26 | *(FEAT-09)* Nhập `1` → Thêm | Alert chặn (hạn mức = 0 còn lại) |
+| RC-27 | *(FEAT-09)* Sửa dòng `900` → `1200` → Lưu | Alert chặn; form sửa **vẫn mở**; dòng vẫn `900` |
+| RC-28 | *(FEAT-09)* Sửa dòng `900` → `800` → Lưu → Xác nhận | Đã làm giữ nguyên `900` (giảm được phép) |
+| RC-29 | *(FEAT-09)* Nhập `abc`, `-5`, `1.5` lần lượt | Không ghi; đúng thông báo lỗi giá trị số |
+| RC-30 | *(FEAT-09)* Import JSON vượt hạn mức | Alert kết quả có dòng "Vượt đơn đặt hàng: N mục bị bỏ qua" |
+| RC-31 | *(FEAT-09)* Tắt app, mở lại | Dữ liệu nguyên vẹn; `SUM(qty) ≤ target` |
 
 ---
 
-## §11.2 Kiểm thử tự động (khuyến nghị, Cấp 1)
+## §11.2 Kiểm thử tự động
 
-Cài `jest-expo`, test **hàm thuần** trước:
+### Chạy test tự động
+
+```bash
+npm test     # = node --no-warnings scripts/test-validateQty.mjs
+```
+
+Script dùng `node:assert` (không cài thêm thư viện), chỉ test **hàm thuần** trong `src/utils/validateQty.js` — không cần Expo/SQLite/máy thật. Chạy được ở mọi môi trường Node ≥ 20. Thêm test mới bằng cách thêm `test('tên', () => {...})` trong script.
+
+**Khi sửa logic nghiệp vụ, chạy `npm test` + `npx expo lint` + `npx tsc --noEmit` trước khi kết luận xong.**
+
+### Cài `jest-expo` (khuyến nghị, Cấp 1) — chưa làm
 
 | Hàm | Ca kiểm thử tối thiểu |
+|---|---|
 |---|---|
 | `pctClass` | `100→'ok'`, `99.9→'mid'`, `60→'mid'`, `59.9→'low'`, `0→'low'` |
 | `summaryTotals` | Rỗng → `overallPct = 0`; `target=8030, produced=100` → `overallPct = 1.2` |
 | `filteredItems` | AND PO + tìm kiếm + trạng thái; `target=0` không bao giờ "done" |
 | `isPalletDone` | 1 loại: key `c1-1`; nhiều loại: true khi đủ `c1-2-0`, `c1-2-1` |
 | `countPalletsDone` / `countPalletsDoneWithData` | Map rỗng → `{done:0,total:26}`; imported → 51 |
+| **`parseQty`** *(FEAT-09)* | `'120'→120`; `' 120 '→120`; `'1.200'→1200`; `'1 200'→1200`; `''→null`; `'abc'→null`; `'12abc'→null`; `'-5'→null`; `'1.5'→null`; `'1e3'→null` |
+| **`checkQtyLimit`** *(FEAT-09)* | `hasLimit:false` → luôn `ok`; `produced+incoming === target` → `ok`; `>` → `OVER_TARGET` với `remaining`/`overBy` đúng; `incoming=0` → `ok` |
+| **`formatQtyError`** *(FEAT-09)* | Chuỗi có `ntk`, `target`, `produced`, `remaining`, `overBy`; tiếng Việt có dấu |
 | **Seed (INV-D1)** | Σ qty trên kiện = target; tổng = 8030; số kiện = 26 |

@@ -40,15 +40,19 @@ export const useAppStore = create((set, get) => ({
 
   addEntry: async (ntk, payload) => {
     const { batchId } = get();
-    await q.addEntry(batchId, ntk, payload);
+    const res = await q.addEntry(batchId, ntk, payload);
+    if (res && res.ok === false) return res;
     await get().refreshItems();
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return { ok: true };
   },
 
   updateEntry: async (entryId, payload) => {
-    await q.updateEntry(entryId, payload);
+    const res = await q.updateEntry(entryId, payload);
+    if (res && res.ok === false) return res;
     await get().refreshItems();
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return { ok: true };
   },
 
   removeEntry: async (entryId) => {

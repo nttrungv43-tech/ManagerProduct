@@ -93,7 +93,11 @@ export default function ImportJsonButton({ onImport, theme }) {
             try {
               const res = await onImport(jsonContent);
               if (fmt === 'entries') {
-                Alert.alert('Hoàn tất', `Đã nhập: ${res.imported} mục.\nBỏ qua: ${res.skipped} mục.`);
+                // FEAT-09: báo riêng số mục bị bỏ qua vì vượt đơn đặt hàng.
+                const over = res.skippedOver > 0
+                  ? `\nVượt đơn đặt hàng: ${res.skippedOver} mục bị bỏ qua.`
+                  : '';
+                Alert.alert('Hoàn tất', `Đã nhập: ${res.imported} mục.\nBỏ qua: ${res.skipped} mục.${over}`);
               } else {
                 Alert.alert('Hoàn tất', `Đã nhập: ${res.imported} mã hàng.\nContainer: ${res.containers} | Kiện: ${res.pallets}`);
               }

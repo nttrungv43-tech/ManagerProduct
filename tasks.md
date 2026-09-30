@@ -178,5 +178,48 @@
 
 ---
 
+## FEAT-09: Kiểm tra hạn mức đơn đặt hàng + validate dữ liệu số
+
+> Phạm vi: Cấp 1 (thêm hàm mới) + Cấp 3 (chặn ghi vào `entries`). **Không migration, không đổi chữ ký.**
+> Spec: `specs/features/FEAT-09-validate-qty-limit.md`. Quyết định áp dụng: Q1–Q5 theo mặc định đề xuất trong spec §6.1.
+> - Q1 `defect_qty` **không** tính vào hạn mức · Q2 `target=0` → **không** giới hạn · Q3 so sánh bằng `SUM(qty)` · Q4 cho phép sửa giảm · Q5 **không** có cờ ghi đè.
+
+### Bước 14.1: Logic thuần (🟢 file mới)
+- [x] `src/utils/validateQty.js`: `parseQty` (chuẩn hoá phân tách nghìn, từ chối số thực/âm/ký hiệu khoa học)
+- [x] `checkQtyLimit` (`hasLimit=false` → luôn ok; `incomingQty≤0` → ok; trả `remaining`/`overBy`)
+- [x] `formatQtyError` + nhãn tiếng Việt (`INVALID_QTY_TITLE`, `OVER_TARGET_TITLE`)
+
+### Bước 14.2: Tầng DB (🔒 chỉ thêm, không đổi chữ ký)
+- [x] `getItemTargetUsage(batchId, ntk, excludeEntryId?)` — trừ dòng đang sửa
+- [x] `addEntry` / `updateEntry` kiểm tra trước khi ghi, trả `{ok, error?}`
+- [x] `importEntriesFromJson` kiểm tra **tích luỹ** trong transaction, thêm `skippedOver`
+- [x] Dùng `Map` cho danh sách hạn mức (tránh `ntk` trùng key `Object.prototype`)
+
+### Bước 14.3: Store + UI
+- [x] `useAppStore.addEntry` / `updateEntry` trả `{ok, error?}`, **không** tăng `dataVersion` khi bị chặn
+- [x] `ItemCard.readNumber` — ô trống ⇒ 0 (giữ AC-ITEM-05), giá trị rác ⇒ `Alert` lỗi
+- [x] `handleAdd` / `handleEditSave` — vượt hạn mức ⇒ `Alert`, **giữ nguyên** ô nhập / mở form sửa
+- [x] `ImportJsonButton` — Alert kết quả có dòng "Vượt đơn đặt hàng: N mục bị bỏ qua"
+
+### Bước 14.4: Test
+- [x] `scripts/test-validateQty.mjs` — 44 ca, chạy bằng `npm test`
+- [x] `npx expo lint` — 0 lỗi
+- [x] `npx tsc --noEmit` — 0 lỗi mới (`app-tabs.web.tsx` là lỗi có sẵn từ trước)
+- [x] `npx expo export --platform ios` — bundle 1187 modules, 0 lỗi
+
+### Bước 14.5: Hồi quy thủ công (cần chạy trên máy — chưa làm)
+- [ ] RC-23: mã `106160` nhập `900` → Còn lại `100`
+- [ ] RC-24: nhập `200` → Alert chặn, ô nhập còn nguyên `200`
+- [ ] RC-25: sửa thành `100` → Đã làm `1000`, `100%`
+- [ ] RC-26: nhập `1` → Alert chặn
+- [ ] RC-27: sửa dòng `900` → `1200` → Alert chặn, form sửa vẫn mở
+- [ ] RC-28: sửa dòng `900` → `800` → cho phép
+- [ ] RC-29: nhập `abc`, `-5`, `1.5` → Alert lỗi giá trị số
+- [ ] RC-30: import JSON vượt hạn mức → Alert có dòng đếm mục bị bỏ qua
+- [ ] RC-31: tắt/mở app → dữ liệu nguyên vẹn
+- [ ] RC cũ: RC-01..06, RC-11, RC-12, RC-20, RC-22
+
+---
+
 ## Các task tiếp theo
 - FEAT-02: Lọc lịch sử theo ngày/tháng/năm

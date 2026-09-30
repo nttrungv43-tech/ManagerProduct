@@ -75,6 +75,24 @@ Khi import packing list, `containerId` (ví dụ `HFMU2620080`) thay thế `c1`/
 
 ---
 
+## §5.4 Nguồn dữ liệu kiểm tra hạn mức đơn đặt hàng (FEAT-09)
+
+Kiểm tra hợp lệ **không cần bảng/cột/index mới** — dùng hai cột đã có:
+
+| Nhu cầu | Nguồn | Ghi chú |
+|---|---|---|
+| Hạn mức (đơn đặt hàng) | `items.target` cho `ntk` trong `order_batch_id` đang `active` | Nguồn duy nhất. Không thêm cột hạn mức riêng |
+| Đã sản xuất | `SUM(entries.qty)` cùng `order_batch_id` | Phải **trừ** dòng đang sửa (`id = excludeEntryId`) khi kiểm tra AC-ITEM-18 |
+| Phạm vi | Chỉ batch `active` | Batch `archived` không sửa được từ UI (INV-B2) |
+
+Quy tắc: `SUM(entries.qty) ≤ items.target` cho mọi `ntk` khi `items.target > 0`.
+- `items.target = 0` hoặc NULL ⇒ `hasLimit = false`, **không** áp dụng giới hạn.
+- `defect_qty` **không** tính vào hạn mức (hàng lỗi nằm trong tổng đã sản xuất).
+- Dữ liệu `entries` **đã tồn tại** không được kiểm tra lại và không bị tự sửa. DB có thể ở trạng thái "vượt" hạn mức sau khi `importItemsFromJson` nạp `target` mới nhỏ hơn — đây là trạng thái được chấp nhận.
+- Truy vấn kiểm tra dùng index `idx_entries_ntk(ntk, order_batch_id)`.
+
+---
+
 ## §10.1 Phân cấp thay đổi
 
 | Cấp | Loại | Ví dụ | Yêu cầu |
@@ -83,6 +101,8 @@ Khi import packing list, `containerId` (ví dụ `HFMU2620080`) thay thế `c1`/
 | **1** | Thêm mới | Thêm component, hàm query mới | Spec + checklist hồi quy |
 | **2** | Thay đổi dữ liệu | Thêm bảng/cột/index | Cấp 1 + migration + kiểm thử nâng cấp |
 | **3** | Sửa hành vi đã có | Đổi công thức, đổi flow | Chỉ đạo rõ chủ dự án |
+
+> **FEAT-09 là ngoại lệ cần lưu ý:** thêm hàm mới (Cấp 1) nhưng đồng thời **chặn ghi** vào `entries` — hành vi của `addEntry`/`updateEntry` đang tồn tại thay đổi ⇒ cần chỉ đạo **Cấp 3**. Không có migration.
 
 ---
 

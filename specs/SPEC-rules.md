@@ -52,7 +52,7 @@
 |---|---|---|
 | 🔒 **Đóng băng** | Không sửa hành vi/chữ ký/cấu trúc nếu chưa có spec Cấp 3. Chỉ được **thêm** | `db/schema.js`, `data/seed.js` (cấu trúc), `db/queries.js` (chữ ký hiện có), `store/useAppStore.js` (tên state/action hiện có) |
 | 🟡 **Cẩn trọng** | Được sửa để thêm tính năng, phải giữ mọi AC hiện có | `db/index.js`, `screens/*`, `components/ItemCard.js`, `components/PalletRow.js`, `app/_layout.tsx`, `app/(tabs)/_layout.tsx` |
-| 🟢 **Tự do** | Sửa/thêm thoải mái trong phạm vi tính năng | `components/*` còn lại (trừ ItemCard/PalletRow), `theme.js` (thêm token), file mới |
+| 🟢 **Tự do** | Sửa/thêm thoải mái trong phạm vi tính năng | `components/*` còn lại (trừ ItemCard/PalletRow), `theme.js` (thêm token), file mới (`utils/*`, `specs/*`) |
 
 > Route `src/app/(tabs)/*.tsx` là 🔒: mỗi file đúng 1 dòng re-export.
 
@@ -74,6 +74,7 @@
 | **INV-U2** | Chuỗi giao diện bằng tiếng Việt, giữ nguyên các nhãn trong §7 |
 | **INV-A1** | Dữ liệu nghiệp vụ chỉ ở SQLite; không có network |
 | **INV-A2** | Chiều phụ thuộc giữa các tầng theo §3 (`SPEC-reference.md`) |
+| **INV-V1** | *(FEAT-09)* Với mọi `ntk` có `items.target > 0` trong batch `active`: `SUM(entries.qty) ≤ items.target`. Mọi `INSERT`/`UPDATE` vào `entries` **phải** kiểm tra ở `queries.js` — không được chỉ kiểm ở UI. Xem `SPEC-data.md` §5.4 |
 
 ---
 
