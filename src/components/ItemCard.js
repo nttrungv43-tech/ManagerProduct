@@ -10,10 +10,13 @@ import {
   parseQty, formatQtyError,
   INVALID_QTY_TITLE, INVALID_QTY_MESSAGE, OVER_TARGET_TITLE,
 } from '@/utils/validateQty';
+// FEAT-11: xoá mã trong 1 chạm. Dùng chung helper với nút trong ItemEditSheet (AC-EDIT-33/34).
+import { confirmDeleteItem } from '@/utils/deleteItem';
 
 const COLOR_BY_CLASS = { ok: 'good', mid: 'warn', low: 'bad' };
 
-export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDeleteEntry }) {
+// FEAT-11: `onDeleteItem` là prop TUỲ CHỌN — không truyền thì nút xoá không hiện (AC-EDIT-35).
+export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDeleteEntry, onEditItem, onDeleteItem }) {
   const [expanded, setExpanded] = useState(false);
   const [qty, setQty] = useState('');
   const [line, setLine] = useState('manual');
@@ -162,6 +165,28 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
         <Text style={[styles.numTxt(theme), { color: theme.bad }]}>Lỗi: {item.defect || 0}</Text>
       </View>
 
+      {(onEditItem || onDeleteItem) && (
+        <View style={styles.editRow}>
+          {onEditItem && (
+            <TouchableOpacity style={styles.editBtn} onPress={() => onEditItem(item)}>
+              <Text style={{ color: theme.accent, fontWeight: '600', fontSize: 12.5 }}>
+                ✎ Sửa mã hàng & số lượng
+              </Text>
+            </TouchableOpacity>
+          )}
+          {onDeleteItem && (
+            <TouchableOpacity
+              style={styles.editBtn}
+              onPress={() => confirmDeleteItem({ item, onDelete: onDeleteItem, alert: Alert })}
+            >
+              <Text style={{ color: theme.bad, fontWeight: '600', fontSize: 12.5 }}>
+                ✕ Xoá mã hàng
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
       {expanded && (
         <View>
           <Text style={styles.sectionLabel(theme)}>Nhập sản xuất hôm nay</Text>
@@ -293,6 +318,8 @@ const styles = StyleSheet.create({
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   title: { fontSize: 16, fontWeight: '700' },
   numsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 9 },
+  editRow: { marginTop: 10, alignSelf: 'flex-start', flexDirection: 'row', gap: 16 },
+  editBtn: { flexDirection: 'row' },
   numTxt: (theme) => ({ color: theme.sub, fontSize: 12 }),
   sectionLabel: (theme) => ({ color: theme.sub, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', marginTop: 14, marginBottom: 6 }),
   input: (theme) => ({ borderWidth: 1, borderColor: theme.line, backgroundColor: theme.bg, color: theme.ink, borderRadius: 10, padding: 12, fontSize: 15 }),

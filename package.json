@@ -45,7 +45,11 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "node --no-warnings scripts/test-validateQty.mjs"
+    "test": "node --no-warnings scripts/test-validateQty.mjs && node --no-warnings scripts/test-palletKey.mjs && node --no-warnings scripts/test-deleteItem.mjs && node --no-warnings scripts/test-poSummary.mjs",
+    "test:validate": "node --no-warnings scripts/test-validateQty.mjs",
+    "test:pallet": "node --no-warnings scripts/test-palletKey.mjs",
+    "test:delete": "node --no-warnings scripts/test-deleteItem.mjs",
+    "test:po": "node --no-warnings scripts/test-poSummary.mjs"
   },
   "private": true
 }

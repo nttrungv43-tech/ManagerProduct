@@ -124,7 +124,7 @@ src/
 
 | ID | Ưu tiên | Mô tả | Hướng sửa |
 |---|---|---|---|
-| **BUG-01** | 🔴 P0 | `pallet_status.key` PK một mình; `ON CONFLICT(key)` ghi đè batch cũ. Sau finishOrder, key `c1-1` batch mới trùng cũ | Migration v2: `PRIMARY KEY (key, order_batch_id)`, `ON CONFLICT(key, order_batch_id)` |
+| **BUG-01** | ✅ | `pallet_status.key` PK một mình; `ON CONFLICT(key)` ghi đè batch cũ. Sau finishOrder, key `c1-1` batch mới trùng cũ | ✅ Fix: migration v2 (`src/db/migrations.js`) — `PRIMARY KEY (key, order_batch_id)`, `ON CONFLICT(key, order_batch_id)` |
 | **BUG-02** | 🟠 P1 | `new Date().toISOString()` dùng giờ UTC; nhập 00:00–06:59 sáng VN bị thành ngày trước | `src/utils/date.js` với `todayLocal()` |
 | **BUG-03** | 🟠 P1 | `finishOrder` không trong transaction | Bọc trong `db.withTransactionAsync` |
 | **BUG-04** | 🟡 P2 | `ItemCard.handleAdd` lưu `defectTypes` khi `defectQty = 0` | `defectTypes: dq > 0 ? types : []` |
@@ -133,19 +133,22 @@ src/
 | **UX-01** | 🟢 P3 | HistoryScreen `onTouchEnd` unreliable | Đổi `TouchableOpacity`/`Pressable` |
 | **DEBT-01** | 🟢 P3 | WAL trong `CREATE_TABLES_SQL` | Chạy WAL riêng trong `getDb()` |
 | **DEBT-02** | 🟡 P3 | `containersData` cứng trong code | ✅ Đang giải quyết: FEAT-08 phase 2 thêm `container_data` |
-| **DEBT-03** | 🟢 P3 | Chưa có test tự động | 🟡 Một phần: unit test hàm thuần chạy bằng `npm test` (`scripts/test-validateQty.mjs`, FEAT-09). Chưa có `jest-expo`; xem §11.2 |
+| **DEBT-03** | 🟢 P3 | Chưa có test tự động | 🟡 Một phần: `npm test` chạy 2 script hàm thuần (`test-validateQty.mjs` FEAT-09, `test-palletKey.mjs` FEAT-10 — 72 ca). Chưa có `jest-expo`; xem §11.2 |
 
 ---
 
 ## §12. Registry & Backlog
 
 ### §12.1 Đã cài đặt
-`F-ITEMS` · `F-CONT` · `F-HIST` · `F-APP` · `F-IMPORT` · `FEAT-01` (form sửa nhật ký inline) · `FEAT-09` (hạn mức đơn đặt hàng + validate số)
+`F-ITEMS` · `F-CONT` · `F-HIST` · `F-APP` · `F-IMPORT` · `FEAT-01` (form sửa nhật ký inline) · `FEAT-09` (hạn mức đơn đặt hàng + validate số) · `FEAT-10` (thêm/sửa/xoá sản phẩm, số lượng, kiện) · `FEAT-11` (nút xoá mã trực tiếp trên thẻ) · `FEAT-12` (tổng số lượng theo từng PO)
 
 ### §12.2 Backlog
 | ID | Ưu tiên | Cấp | Tính năng | Ràng buộc |
 |---|---|---|---|---|
-| BUG-01, 03, 02 | P0/P1 | 2–3 | Sửa lỗi mục 9 | Cần chỉ đạo Cấp 3; BUG-01 cần migration |
+| **FEAT-11** | ✅ P3 | **1** | **Nút xoá mã hàng trực tiếp trên thẻ** (tab Mã hàng) | ✅ Xong. Tái dùng `removeItem` của FEAT-10; helper `utils/deleteItem.js`; thêm `INV-V3`. Spec: `specs/features/FEAT-11-delete-item-quick.md` |
+| **FEAT-12** | ✅ P3 | **1** | **Bảng tổng theo PO** (Tổng / Đã SX / Còn lại) ở tab Mã hàng | ✅ Xong. `utils/poSummary.js` + `PoSummaryTable`; thêm `INV-D6`. Spec: `specs/features/FEAT-12-po-summary.md` |
+| BUG-03, 02 | P0/P1 | 2–3 | Sửa lỗi mục 9 | Cần chỉ đạo Cấp 3 |
+| BUG-01 | — | 2 | ✅ Fix trong migration v2 của FEAT-10 | PK `(key, order_batch_id)` + khoá theo `ntk` |
 | BUG-05 | P1 | 1 | ✅ Fix: `dataVersion` | — |
 | FEAT-02 | P2 | 1 | Lọc lịch sử theo ngày/tháng/năm | `setHistoryFilterValue`; `YYYY-MM` khớp `groupKey` |
 | FEAT-03 | P2 | 1 | Sao lưu/xuất CSV | `expo-file-system` + `expo-sharing`; chỉ đọc DB |

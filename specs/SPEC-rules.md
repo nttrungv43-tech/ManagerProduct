@@ -68,13 +68,17 @@
 | **INV-D1** | Nhất quán seed: với mỗi `ntk`, tổng `qty` của mọi kiện trong `containersData` = `target` trong `seedItems`. Tổng = 8.030. |
 | **INV-D2** | `date` luôn là chuỗi `YYYY-MM-DD` |
 | **INV-D3** | `line ∈ {manual, auto}`; `defect_types` chỉ chứa `yellow`/`red`/`tear`, cách nhau dấu phẩy |
-| **INV-D4** | Định dạng key pallet (§5.2 trong `SPEC-data.md`) không đổi; không đổi thứ tự `items` trong pallet |
+| **INV-D4** | *(FEAT-10 đã cập nhật)* Định dạng key pallet: kiện 1 loại → `` `${cid}-${no}` ``; kiện nhiều loại → `` `${cid}-${no}-${ntk}` `` (**theo mã hàng**, không theo chỉ số). Xem `SPEC-data.md` §5.2, §5.5.2 |
 | **INV-D5** | Không có `entries` mồ côi (`order_batch_id` phải tồn tại) |
 | **INV-U1** | Hành động phá huỷ/đảo trạng thái luôn có bước xác nhận (`Alert.alert`) |
 | **INV-U2** | Chuỗi giao diện bằng tiếng Việt, giữ nguyên các nhãn trong §7 |
 | **INV-A1** | Dữ liệu nghiệp vụ chỉ ở SQLite; không có network |
 | **INV-A2** | Chiều phụ thuộc giữa các tầng theo §3 (`SPEC-reference.md`) |
 | **INV-V1** | *(FEAT-09)* Với mọi `ntk` có `items.target > 0` trong batch `active`: `SUM(entries.qty) ≤ items.target`. Mọi `INSERT`/`UPDATE` vào `entries` **phải** kiểm tra ở `queries.js` — không được chỉ kiểm ở UI. Xem `SPEC-data.md` §5.4 |
+| **INV-V2** | *(FEAT-10)* Mọi `ntk` xuất hiện trong `container_data` của batch `active` phải tồn tại trong `items` cùng batch. Xoá/sửa `items` phải kiểm tra ngược lại |
+| **INV-V3** | *(FEAT-11)* Mọi thao tác xoá/sửa mã hàng phải nhắm **batch `active`**. Store luôn lấy `getActiveBatchId()`; UI chỉ truyền callback khi batch `active`. Nếu về sau `ItemsScreen` hiển thị batch `archived`, thao tác sẽ xoá nhầm dòng cùng `ntk` ở batch **active** — phải chặn ở tầng UI trước (AC-EDIT-32) |
+| **INV-D6** | *(FEAT-12)* Tổng theo PO là **dữ liệu dẫn xuất**, không lưu DB. Mã thuộc nhiều PO (`po` có `+`) **không được** cộng vào từng PO, gom vào nhóm riêng ⇒ **Σ cột "Tổng" của bảng PO luôn == tổng toàn đơn**. Xem `SPEC-data.md` §5.6 |
+| **INV-P1** | *(FEAT-10)* Khoá `pallet_status` phải **ổn định**: thay đổi thành phần kiện phải di chuyển trạng thái `done` sang khoá mới trong cùng transaction — không được làm mất trạng thái tick âm thầm |
 
 ---
 

@@ -1,7 +1,12 @@
 // src/db/queries.js
 import { getDb, getActiveBatchId } from './index';
 import { containersData, seedItems } from '@/data/seed';
-import { checkQtyLimit } from '@/utils/validateQty';
+import { checkQtyLimit, parseQty } from '@/utils/validateQty';
+import {
+  palletKey, isMultiItemPallet, remapPalletStatus, recalcPalletTotals,
+} from '@/utils/palletKey';
+
+const NTK_RE = /^[0-9A-Za-z]+$/;
 
 // ---------- ITEMS ----------
 
@@ -99,6 +104,127 @@ export async function removeEntry(entryId) {
   await db.runAsync(`DELETE FROM entries WHERE id = ?`, [entryId]);
 }
 
+// ---------- ITEMS CRUD (FEAT-10) ----------
+
+function normalizeNtk(raw) {
+  if (typeof raw !== 'string') return null;
+  const ntk = raw.trim();
+  return NTK_RE.test(ntk) ? ntk : null;
+}
+
+async function recalcBatchTargetInTx(db, batchId) {
+  const row = await db.getFirstAsync(
+    `SELECT COALESCE(SUM(target), 0) as total FROM items WHERE order_batch_id = ?`,
+    [batchId]
+  );
+  await db.runAsync(
+    `UPDATE order_batches SET total_target = ? WHERE id = ?`,
+    [row?.total || 0, batchId]
+  );
+}
+
+export async function recalcBatchTarget(batchId) {
+  const db = await getDb();
+  await recalcBatchTargetInTx(db, batchId);
+}
+
+export async function addItem(batchId, { ntk, po, target }) {
+  const db = await getDb();
+  const code = normalizeNtk(ntk);
+  if (!code) return { ok: false, error: { code: 'INVALID_NTK' } };
+  const t = parseQty(target);
+  if (t === null) return { ok: false, error: { code: 'INVALID_TARGET' } };
+
+  const existing = await db.getFirstAsync(
+    `SELECT ntk FROM items WHERE ntk = ? AND order_batch_id = ?`,
+    [code, batchId]
+  );
+  if (existing) return { ok: false, error: { code: 'ITEM_EXISTS', ntk: code } };
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `INSERT INTO items (ntk, po, target, order_batch_id) VALUES (?, ?, ?, ?)`,
+      [code, (po || '').trim(), t, batchId]
+    );
+    await recalcBatchTargetInTx(db, batchId);
+  });
+  return { ok: true };
+}
+
+export async function updateItem(batchId, ntk, { po, target }) {
+  const db = await getDb();
+  const code = normalizeNtk(ntk);
+  if (!code) return { ok: false, error: { code: 'INVALID_NTK' } };
+
+  const current = await db.getFirstAsync(
+    `SELECT ntk, po, target FROM items WHERE ntk = ? AND order_batch_id = ?`,
+    [code, batchId]
+  );
+  if (!current) return { ok: false, error: { code: 'ITEM_NOT_FOUND', ntk: code } };
+
+  const newTarget = parseQty(target);
+  if (newTarget === null) return { ok: false, error: { code: 'INVALID_TARGET' } };
+
+  // Không cho hạ mức xuống dưới số đã sản xuất — bảo vệ INV-V1 của FEAT-09.
+  if (newTarget > 0) {
+    const produced = await db.getFirstAsync(
+      `SELECT COALESCE(SUM(qty), 0) as produced FROM entries WHERE ntk = ? AND order_batch_id = ?`,
+      [code, batchId]
+    );
+    const producedQty = produced?.produced || 0;
+    if (newTarget < producedQty) {
+      return { ok: false, error: { code: 'TARGET_BELOW_PRODUCED', ntk: code, target: newTarget, produced: producedQty } };
+    }
+  }
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE items SET po = ?, target = ? WHERE ntk = ? AND order_batch_id = ?`,
+      [(po || '').trim(), newTarget, code, batchId]
+    );
+    await recalcBatchTargetInTx(db, batchId);
+  });
+  return { ok: true };
+}
+
+export async function removeItem(batchId, ntk) {
+  const db = await getDb();
+  const code = normalizeNtk(ntk);
+  if (!code) return { ok: false, error: { code: 'INVALID_NTK' } };
+
+  const current = await db.getFirstAsync(
+    `SELECT ntk FROM items WHERE ntk = ? AND order_batch_id = ?`,
+    [code, batchId]
+  );
+  if (!current) return { ok: false, error: { code: 'ITEM_NOT_FOUND', ntk: code } };
+
+  const produced = await db.getFirstAsync(
+    `SELECT COALESCE(SUM(qty), 0) as produced FROM entries WHERE ntk = ? AND order_batch_id = ?`,
+    [code, batchId]
+  );
+  const producedQty = produced?.produced || 0;
+  if (producedQty > 0) {
+    return { ok: false, error: { code: 'ITEM_HAS_ENTRIES', ntk: code, produced: producedQty } };
+  }
+
+  // INV-V2: mã hàng còn nằm trong kiện thì không được xoá.
+  // Dùng đường đọc chỉ-để-kiểm-tra để không vô tình vật chất hoá seed vào DB.
+  const containers = await fetchContainersView(batchId);
+  const inPallets = countPalletsWithNtk(containers, code);
+  if (inPallets > 0) {
+    return { ok: false, error: { code: 'ITEM_IN_PALLETS', ntk: code, pallets: inPallets } };
+  }
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `DELETE FROM items WHERE ntk = ? AND order_batch_id = ?`,
+      [code, batchId]
+    );
+    await recalcBatchTargetInTx(db, batchId);
+  });
+  return { ok: true };
+}
+
 // ---------- PALLETS ----------
 
 export async function fetchPalletStatus(batchId) {
@@ -116,16 +242,16 @@ export async function setPalletStatus(batchId, key, done) {
   const db = await getDb();
   await db.runAsync(
     `INSERT INTO pallet_status (key, order_batch_id, done) VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET done = excluded.done`,
+     ON CONFLICT(key, order_batch_id) DO UPDATE SET done = excluded.done`,
     [key, batchId, done ? 1 : 0]
   );
 }
 
 export function isPalletDone(cid, pallet, palletDoneMap) {
-  if (pallet.items.length > 1) {
-    return pallet.items.every((_, idx) => !!palletDoneMap[`${cid}-${pallet.no}-${idx}`]);
+  if (isMultiItemPallet(pallet)) {
+    return pallet.items.every(it => !!palletDoneMap[palletKey(cid, pallet.no, it)]);
   }
-  return !!palletDoneMap[`${cid}-${pallet.no}`];
+  return !!palletDoneMap[palletKey(cid, pallet.no)];
 }
 
 export function countPalletsDone(palletDoneMap) {
@@ -142,6 +268,228 @@ export function countPalletsDoneWithData(palletDoneMap, containers) {
     });
   });
   return { done, total };
+}
+
+// ---------- PALLET CRUD (FEAT-10) ----------
+
+function countPalletsWithNtk(containers, ntk) {
+  let count = 0;
+  (containers || []).forEach(c => {
+    (c.pallets || []).forEach(p => {
+      if ((p.items || []).some(it => it.ntk === ntk)) count++;
+    });
+  });
+  return count;
+}
+
+async function writeContainerDataInTx(db, batchId, containers) {
+  await db.runAsync(
+    `INSERT OR REPLACE INTO container_data (batch_id, data, created_at) VALUES (?, ?, ?)`,
+    [batchId, JSON.stringify(containers), new Date().toISOString().slice(0, 10)]
+  );
+  await db.runAsync(
+    `UPDATE order_batches SET pallets_total = ? WHERE id = ?`,
+    [recalcPalletTotals(containers).count, batchId]
+  );
+}
+
+async function replacePalletStatusInTx(db, batchId, doneMap) {
+  await db.runAsync(`DELETE FROM pallet_status WHERE order_batch_id = ?`, [batchId]);
+  for (const [key, done] of Object.entries(doneMap)) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO pallet_status (key, order_batch_id, done) VALUES (?, ?, ?)`,
+      [key, batchId, done ? 1 : 0]
+    );
+  }
+}
+
+/**
+ * Vật chất hoá cấu trúc container từ seed vào DB (giữ nguyên `id` c1/c2/c3)
+ * để các dòng `pallet_status` đang tồn tại không bị mất. AC-EDIT-22.
+ */
+export async function materializeContainers(batchId) {
+  const db = await getDb();
+  const hasData = await db.getFirstAsync(
+    `SELECT batch_id FROM container_data WHERE batch_id = ?`,
+    [batchId]
+  );
+  if (hasData) return false;
+  await db.runAsync(
+    `INSERT OR REPLACE INTO container_data (batch_id, data, created_at) VALUES (?, ?, ?)`,
+    [batchId, JSON.stringify(containersData), new Date().toISOString().slice(0, 10)]
+  );
+  const { count } = recalcPalletTotals(containersData);
+  await db.runAsync(
+    `UPDATE order_batches SET pallets_total = ? WHERE id = ?`,
+    [count, batchId]
+  );
+  return true;
+}
+
+/** Đọc cấu trúc container CHỈ ĐỂ KIỂM TRA — không ghi gì, fallback seed trong bộ nhớ. */
+export async function fetchContainersView(batchId) {
+  const db = await getDb();
+  const row = await db.getFirstAsync(
+    `SELECT data FROM container_data WHERE batch_id = ?`,
+    [batchId]
+  );
+  if (!row || !row.data) return containersData;
+  try {
+    const parsed = JSON.parse(row.data);
+    return Array.isArray(parsed) ? parsed : containersData;
+  } catch {
+    return containersData;
+  }
+}
+
+/** Đọc cấu trúc container để ghi. Tự vật chất hoá seed nếu batch chưa có. Ném lỗi nếu JSON hỏng. */
+export async function getContainerDataForWrite(batchId) {
+  const db = await getDb();
+  let row = await db.getFirstAsync(
+    `SELECT data FROM container_data WHERE batch_id = ?`,
+    [batchId]
+  );
+  if (!row) {
+    await materializeContainers(batchId);
+    row = await db.getFirstAsync(
+      `SELECT data FROM container_data WHERE batch_id = ?`,
+      [batchId]
+    );
+  }
+  if (!row || !row.data) throw new Error('Không đọc được cấu trúc container.');
+  try {
+    const parsed = JSON.parse(row.data);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    throw new Error('Dữ liệu container bị lỗi, không thể chỉnh sửa.');
+  }
+}
+
+async function validatePalletItems(db, batchId, items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return { ok: false, error: { code: 'PALLET_EMPTY' } };
+  }
+  const seen = new Set();
+  for (const it of items) {
+    const ntk = normalizeNtk(it?.ntk);
+    if (!ntk) return { ok: false, error: { code: 'INVALID_NTK' } };
+    if (seen.has(ntk)) return { ok: false, error: { code: 'DUPLICATE_NTK', ntk } };
+    seen.add(ntk);
+    const qty = parseQty(it?.qty);
+    if (qty === null || qty <= 0) return { ok: false, error: { code: 'INVALID_PALLET_QTY', ntk } };
+
+    const row = await db.getFirstAsync(
+      `SELECT ntk FROM items WHERE ntk = ? AND order_batch_id = ?`,
+      [ntk, batchId]
+    );
+    if (!row) return { ok: false, error: { code: 'ITEM_NOT_IN_ORDER', ntk } };
+  }
+  return { ok: true };
+}
+
+function normalizePalletItems(items) {
+  return items.map(it => ({ ntk: normalizeNtk(it.ntk), qty: parseQty(it.qty) }));
+}
+
+export async function addPallet(batchId, containerId, { no, items }) {
+  const db = await getDb();
+  const palletNo = parseQty(no);
+  if (palletNo === null || palletNo <= 0) return { ok: false, error: { code: 'INVALID_PALLET_NO' } };
+
+  const check = await validatePalletItems(db, batchId, items);
+  if (!check.ok) return check;
+
+  const containers = await getContainerDataForWrite(batchId);
+  const container = (containers || []).find(c => c.id === containerId);
+  if (!container) return { ok: false, error: { code: 'CONTAINER_NOT_FOUND' } };
+  if ((container.pallets || []).some(p => p.no === palletNo)) {
+    return { ok: false, error: { code: 'PALLET_EXISTS', no: palletNo } };
+  }
+
+  const nextContainers = containers.map(c => (
+    c.id === containerId
+      ? { ...c, pallets: [...(c.pallets || []), { no: palletNo, items: normalizePalletItems(items) }] }
+      : c
+  ));
+
+  const doneMap = await fetchPalletStatus(batchId);
+  const nextDone = remapPalletStatus(containers, nextContainers, doneMap);
+
+  await db.withTransactionAsync(async () => {
+    await writeContainerDataInTx(db, batchId, nextContainers);
+    await replacePalletStatusInTx(db, batchId, nextDone);
+  });
+  return { ok: true, no: palletNo };
+}
+
+export async function updatePallet(batchId, containerId, palletNo, { no, items }) {
+  const db = await getDb();
+  const currentNo = parseQty(palletNo);
+  if (currentNo === null || currentNo <= 0) return { ok: false, error: { code: 'INVALID_PALLET_NO' } };
+
+  // Q4: v1 cấm đổi số hiệu kiện (sẽ phải di chuyển khoá pallet_status).
+  const newNo = no === undefined || no === null ? currentNo : parseQty(no);
+  if (newNo === null || newNo <= 0) return { ok: false, error: { code: 'INVALID_PALLET_NO' } };
+  if (newNo !== currentNo) return { ok: false, error: { code: 'PALLET_NO_IMMUTABLE' } };
+
+  const check = await validatePalletItems(db, batchId, items);
+  if (!check.ok) return check;
+
+  const containers = await getContainerDataForWrite(batchId);
+  const container = (containers || []).find(c => c.id === containerId);
+  if (!container) return { ok: false, error: { code: 'CONTAINER_NOT_FOUND' } };
+  if (!(container.pallets || []).some(p => p.no === currentNo)) {
+    return { ok: false, error: { code: 'PALLET_NOT_FOUND', no: currentNo } };
+  }
+
+  const nextContainers = containers.map(c => (
+    c.id === containerId
+      ? {
+        ...c,
+        pallets: (c.pallets || []).map(p => (
+          p.no === currentNo ? { ...p, items: normalizePalletItems(items) } : p
+        )),
+      }
+      : c
+  ));
+
+  const doneMap = await fetchPalletStatus(batchId);
+  // INV-P1: di chuyển trạng thái tick sang khoá mới theo ntk.
+  const nextDone = remapPalletStatus(containers, nextContainers, doneMap);
+
+  await db.withTransactionAsync(async () => {
+    await writeContainerDataInTx(db, batchId, nextContainers);
+    await replacePalletStatusInTx(db, batchId, nextDone);
+  });
+  return { ok: true, no: currentNo };
+}
+
+export async function removePallet(batchId, containerId, palletNo) {
+  const db = await getDb();
+  const currentNo = parseQty(palletNo);
+  if (currentNo === null || currentNo <= 0) return { ok: false, error: { code: 'INVALID_PALLET_NO' } };
+
+  const containers = await getContainerDataForWrite(batchId);
+  const container = (containers || []).find(c => c.id === containerId);
+  if (!container) return { ok: false, error: { code: 'CONTAINER_NOT_FOUND' } };
+  const pallet = (container.pallets || []).find(p => p.no === currentNo);
+  if (!pallet) return { ok: false, error: { code: 'PALLET_NOT_FOUND', no: currentNo } };
+
+  // AC-EDIT-20: giữ nguyên số hiệu các kiện còn lại, chỉ gỡ đúng kiện này.
+  const nextContainers = containers.map(c => (
+    c.id === containerId
+      ? { ...c, pallets: (c.pallets || []).filter(p => p.no !== currentNo) }
+      : c
+  ));
+
+  const doneMap = await fetchPalletStatus(batchId);
+  const nextDone = remapPalletStatus(containers, nextContainers, doneMap);
+
+  await db.withTransactionAsync(async () => {
+    await writeContainerDataInTx(db, batchId, nextContainers);
+    await replacePalletStatusInTx(db, batchId, nextDone);
+  });
+  return { ok: true, no: currentNo };
 }
 
 // ---------- HISTORY ----------

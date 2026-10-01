@@ -1,6 +1,7 @@
 // src/db/index.js
 import * as SQLite from 'expo-sqlite';
 import { CREATE_TABLES_SQL } from './schema';
+import { runMigrations } from './migrations';
 import { seedItems, containersData } from '@/data/seed';
 
 let dbInstance = null;
@@ -9,6 +10,7 @@ export async function getDb() {
   if (dbInstance) return dbInstance;
   dbInstance = await SQLite.openDatabaseAsync('production_tracker.db');
   await dbInstance.execAsync(CREATE_TABLES_SQL);
+  await runMigrations(dbInstance);
   await ensureActiveBatch(dbInstance);
   return dbInstance;
 }

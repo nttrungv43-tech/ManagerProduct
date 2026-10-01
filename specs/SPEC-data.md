@@ -55,12 +55,15 @@ Mỗi batch có **0 hoặc 1** hàng. `finishOrder` không xóa. Import mới �
 
 ## §5.2 Định dạng key pallet (BẤT BIẾN)
 
+> **FEAT-10 đã đổi định dạng:** khoá theo **mã hàng** thay vì chỉ số. Bảng dưới là định dạng **hiện hành**.
+> Định dạng cũ (`${cid}-${no}-${idx}`) chỉ còn trong DB chưa nâng cấp; migration v2 chuyển sang định dạng mới.
+
 | Loại kiện | Key | Ví dụ |
 |---|---|---|
 | Kiện 1 loại hàng | `` `${containerId}-${palletNo}` `` | `'c1-3'` |
-| Từng loại trong kiện nhiều loại | `` `${containerId}-${palletNo}-${itemIndex}` `` | `'c1-2-0'`, `'c1-2-1'` |
+| Từng loại trong kiện nhiều loại | `` `${containerId}-${palletNo}-${ntk}` `` | `'c1-2-106160'`, `'c1-2-1063022'` |
 
-`itemIndex` là chỉ số (từ 0) trong `pallet.items`. **Đổi thứ tự phần tử trong `seed.js` sẽ làm lệch dữ liệu.**
+Dùng `ntk` (định danh tự nhiên) nên trạng thái tick **không bị mất** khi thêm/xoá/đổi thứ tự dòng hàng trong kiện. Hàm dựng khoá: `palletKey()` trong `src/utils/palletKey.js`; chuyển đổi khi đổi thành phần kiện: `remapPalletStatus()`.
 
 Khi import packing list, `containerId` (ví dụ `HFMU2620080`) thay thế `c1`/`c2`/`c3`. Chúng không xung đột trong cùng batch vì mỗi batch chỉ dùng một nguồn (seed HOẶC imported).
 
@@ -93,6 +96,108 @@ Quy tắc: `SUM(entries.qty) ≤ items.target` cho mọi `ntk` khi `items.target
 
 ---
 
+## §5.5 Mô hình dữ liệu sửa tay sản phẩm & kiện (FEAT-10)
+
+> Chi tiết: [`features/FEAT-10-edit-items-pallets.md`](features/FEAT-10-edit-items-pallets.md).
+
+### §5.5.1 Không cần bảng/cột mới
+
+| Đối tượng | Thay đổi schema? | Cách thực hiện |
+|---|---|---|
+| `items` | ❌ | `INSERT` / `UPDATE` / `DELETE` trên PK `(ntk, order_batch_id)`; không thêm cột |
+| `container_data` | ❌ | Sửa **tại chỗ** JSON `data` (read‑modify‑write) trong transaction |
+| `order_batches.total_target`, `pallets_total` | ❌ | Tính lại sau mỗi thay đổi |
+| `pallet_status` | ⚠️ xem §5.5.2 | Có thể phải đổi giá trị `key` + sửa PK (BUG-01) |
+
+### §5.5.2 Định dạng key pallet — **đã chọn PA A** (khóa theo `ntk`)
+
+`INV-D4` (§5.2) coi định dạng key là **BẤT BIẾN**. Hiện tại:
+
+| Loại kiện | Key hiện tại | Vấn đề khi sửa tay |
+|---|---|---|
+| 1 loại hàng | `` `${cid}-${no}` `` | Thêm dòng thứ 2 ⇒ đổi dạng khoá ⇒ **mất tick** |
+| Nhiều loại hàng | `` `${cid}-${no}-${idx}` `` | Xoá dòng giữa ⇒ các dòng sau **dịch chỉ số** ⇒ **mất tick** |
+
+Ba phương án:
+
+| PA | Cách làm | Migration | Đánh giá |
+|---|---|---|---|
+| **A** ✅ **đã chọn** | Đổi sang `` `${cid}-${no}-${ntk}` `` (kiện 1 loại giữ nguyên dạng cũ) | ✅ Có — gộp vào migration v2 của `BUG-01` | Mọi thao tác về sau an toàn; `ntk` là khóa tự nhiên, không phụ thuộc thứ tự |
+| **B** | Giữ khoá theo `idx`, **cấm** thêm/xoá dòng hàng trong kiện | ❌ Không | An toàn cho dữ liệu nhưng **không** giao được "sửa thành phần kiện" |
+| **C** | Giữ khoá theo `idx`, di chuyển lại khoá mỗi lần đổi thứ tự | ❌ Không | Phức tạp, dễ sai, khó kiểm thử |
+
+**Khuyến nghị: PA A.** Bắt buộc gộp với migration `BUG-01` (PK `(key, order_batch_id)`) để chỉ nâng cấp DB một lần. Lưu ý: migration phải **đọc `container_data.data` bằng JS** để ánh xạ khoá cũ → mới, nên không còn thuần SQL (xem `FEAT-10` §4.2).
+
+### §5.5.3 Vật chất hoá seed → DB (AC-EDIT-22)
+
+Khi batch chưa có dòng `container_data`, UI đang đọc `containersData` từ `src/data/seed.js`. Lần sửa kiện đầu tiên phải:
+
+1. `INSERT` `container_data` với JSON của seed — **giữ nguyên `id`** `c1`/`c2`/`c3` để các dòng `pallet_status` đang tồn tại (khoá `c1-1`…) vẫn khớp.
+2. Rồi mới áp dụng thay đổi của người dùng.
+3. Về sau mọi lần đọc/ghi đi qua DB ⇒ dẹp `DEBT-02`/`ADR-06` một phần.
+
+Batch mới sau `finishOrder` vẫn fallback seed (chưa đổi hành vi AC-CONT-07).
+
+### §5.5.3b Hợp đồng xoá mã hàng (FEAT-10, giữ nguyên ở FEAT-11)
+
+| Vấn đề | Xử lý |
+|---|---|
+| Cột mới / migration | **Không** — `removeItem` chỉ `DELETE` 1 dòng + cập nhật `total_target`, tất cả trong một transaction |
+| Mã **đã có nhật ký** (`entries`) | **Chặn** (`ITEM_HAS_ENTRIES`) — bảo vệ INV-D5. Hướng dẫn giảm `target` thay vì xoá |
+| Mã **đang có trong kiện** (`container_data`) | **Chặn** (`ITEM_IN_PALLETS`), báo số kiện còn chứa — bảo vệ INV-V2 |
+| Batch không phải `active` | Chặn ở tầng UI + `store` luôn lấy `getActiveBatchId()` — bảo vệ INV-B2/V3 |
+| Hoàn tác (undo) | **Không có** — xoá là không hoàn tác được |
+
+> **FEAT-11 không đổi hợp đồng này.** Nó chỉ thêm một lối vào cùng hàm `removeItem`. Xem [`features/FEAT-11-delete-item-quick.md`](features/FEAT-11-delete-item-quick.md).
+
+### §5.5.4 Nới bất biến `INV-D1`
+
+`INV-D1` hiện yêu cầu `Σ qty mọi kiện = target` cho từng `ntk`. Khi người dùng tự sửa kiện/target, bất biến này **không còn đúng** theo nghĩa tuyệt đối. Đề xuất (Q7):
+
+- `INV-D1` giữ nguyên giá trị **cho seed tĩnh** (dùng trong unit test §11.2).
+- Với dữ liệu sửa tay: **hiển thị cảnh báo lệch**, không chặn.
+
+### §5.5.5 Tính lại tổng
+
+| Tổng | Công thức | Cập nhật khi |
+|---|---|---|
+| `order_batches.total_target` | `SUM(items.target)` của batch | thêm/sửa/xoá mã hàng, import items |
+| `order_batches.pallets_total` | `COUNT(pallets)` của `container_data` | thêm/sửa/xoá kiện, import packing list |
+
+Cả hai phải ghi **cùng transaction** với thay đổi gốc.
+
+---
+
+## §5.6 Dữ liệu dẫn xuất: tổng theo PO (FEAT-12)
+
+> **Không lưu trong DB.** Tính lại từ `items` mỗi lần hiển thị bằng hàm thuần `poSummaries()` (`src/utils/poSummary.js`). Chi tiết: [`features/FEAT-12-po-summary.md`](features/FEAT-12-po-summary.md).
+
+### §5.6.1 Quy tắc gom nhóm
+
+| Trường hợp | Xử lý |
+|---|---|
+| `po` **không** chứa `+` | Cộng `target` / `produced` / `defect` vào nhóm tên `po` đó |
+| `po` **có** `+` (mã thuộc nhiều PO) | **Không** cộng vào PO nào. Tất cả gom vào **một** nhóm `Nhiều PO`, nhãn `Nhiều PO (n mã)` |
+| Thứ tự PO khác nhau (`A+B` so với `B+A`) | Cùng vào nhóm `Nhiều PO` — **không** tách thành 2 nhóm |
+
+### §5.6.2 Trường dẫn xuất của mỗi nhóm
+
+`target`, `produced`, `remaining = Σ max(target − produced, 0)`, `defect` (tính sẵn, chưa hiển thị), `itemCount`, `pct = target > 0 ? round(produced / target * 1000) / 10 : 0`
+
+### §5.6.3 Chốt chặn: không cộng trùng (INV-D6)
+
+Vì mã nhiều PO **không** được cộng vào từng PO, ta luôn có:
+
+```
+Σ(target của mọi dòng bảng PO) == Σ target của toàn bộ items
+```
+
+**Ví dụ seed hiện tại** (chuẩn kiểm thử): `2600168` = 0 · `2600189` = 1.980 · `Nhiều PO (5 mã)` = 6.050 → **tổng 8.030**, khớp `INV-D1`.
+
+> Nếu sau này đổi quy tắc sang "cộng trọn `target` vào mọi PO của mã", tổng sẽ thành 14.080 ≠ 8.030 ⇒ **vi phạm INV-D6**.
+
+---
+
 ## §10.1 Phân cấp thay đổi
 
 | Cấp | Loại | Ví dụ | Yêu cầu |
@@ -108,7 +213,9 @@ Quy tắc: `SUM(entries.qty) ≤ items.target` cho mọi `ntk` khi `items.target
 
 ## §10.2 Quy trình migration
 
-Hiện tại DB dùng `CREATE TABLE IF NOT EXISTS` và **chưa có version**. Bước đầu tiên (một lần, Cấp 2) là thêm cơ chế migration.
+> **FEAT-10 đã cài đặt** cơ chế version bằng `PRAGMA user_version` trong `src/db/migrations.js`, gọi từ `getDb()` (`src/db/index.js`) **trước** mọi truy vấn. Cài mới và nâng cấp đều đi cùng một đường: `CREATE TABLE IF NOT EXISTS` (v1) → `PRAGMA user_version = 2` (v2). Cài mới: `pallet_status` rỗng nên v2 không làm gì. Nâng cấp: v2 đọc `pallet_status` cũ và `container_data` (nạp seed tĩnh nếu batch cũ chưa có) để ánh xạ khoá theo `ntk`.
+
+**Bảng sao lưu (đường lùi):** trước khi `DROP TABLE pallet_status`, migration sao lưu nguyên bản cũ vào `pallet_status_bak_v1` (chỉ ghi lần đầu, không đè bản sao cũ). Không xoá sau khi thành công — giữ lại để đối chiếu.
 
 ```js
 // src/db/migrations.js  (🟢 file mới)

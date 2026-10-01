@@ -39,6 +39,21 @@
 | RC-29 | *(FEAT-09)* Nhập `abc`, `-5`, `1.5` lần lượt | Không ghi; đúng thông báo lỗi giá trị số |
 | RC-30 | *(FEAT-09)* Import JSON vượt hạn mức | Alert kết quả có dòng "Vượt đơn đặt hàng: N mục bị bỏ qua" |
 | RC-31 | *(FEAT-09)* Tắt app, mở lại | Dữ liệu nguyên vẹn; `SUM(qty) ≤ target` |
+| RC-32 | *(FEAT-10)* Thêm mã hàng `TEST001`, PO đang lọc, `target 500` | Xuất hiện trong danh sách, `Kế hoạch` tổng +500, chip PO cập nhật |
+| RC-33 | *(FEAT-10)* Thêm lại `TEST001` | Alert "đã tồn tại", không tạo dòng trùng |
+| RC-34 | *(FEAT-10)* Sửa `TEST001` → `target 800` | Tổng cập nhật; `Đã làm` giữ nguyên |
+| RC-35 | *(FEAT-10)* Sửa `target` xuống dưới số đã sản xuất | Alert chặn (AC-EDIT-06) |
+| RC-36 | *(FEAT-10)* Thêm kiện mới vào Container 1 | `done/total` +1, `pallets_total` +1, thống kê `pcs` cập nhật |
+| RC-37 | *(FEAT-10)* Tick kiện vừa thêm | Tick được, tính vào thống kê |
+| RC-38 | *(FEAT-10)* Sửa số lượng 1 dòng hàng trong kiện đã tick | `pcs` đổi, **tick vẫn còn** |
+| RC-39 | *(FEAT-10)* Xoá 1 dòng hàng khỏi kiện đã tick 2 dòng | Tick của dòng còn lại **không mất** (kiểm chứng Q1) |
+| RC-40 | *(FEAT-10)* Thêm dòng hàng thứ 2 vào kiện 1 loại đã tick | Thành nhiều loại, **tick không mất** |
+| RC-41 | *(FEAT-10)* Xoá kiện giữa dãy | Số hiệu kiện còn lại không đổi; `done/total` giảm; xoá luôn dòng `pallet_status` |
+| RC-42 | *(FEAT-10)* Xoá mã hàng đã có nhật ký | Alert chặn, dữ liệu nguyên vẹn |
+| RC-43 | *(FEAT-10)* Xoá mã hàng chưa có nhật ký nhưng có trong kiện | Alert chặn, nêu số kiện |
+| RC-44 | *(FEAT-10)* Tắt app, mở lại | Mọi thay đổi còn nguyên; `pallets_total`/`total_target` khớp |
+| RC-45 | *(FEAT-10)* Sửa kiện tay rồi import lại packing list | Cảnh báo ghi đè trước khi import |
+| RC-46 | *(FEAT-10, nếu có migration)* Nâng cấp từ DB cũ có tick cũ | Tick cũ **giữ nguyên**; RC-07..10 vẫn đạt |
 
 ---
 

@@ -20,7 +20,7 @@ function detectFormat(parsed) {
   return 'unknown';
 }
 
-export default function ImportJsonButton({ onImport, theme }) {
+export default function ImportJsonButton({ onImport, hasContainerData, theme }) {
   const [loading, setLoading] = useState(false);
 
   async function handleImport() {
@@ -79,11 +79,16 @@ export default function ImportJsonButton({ onImport, theme }) {
       }
     }
 
+    // AC-EDIT-25: batch đã có cấu trúc container ⇒ import sẽ ghi đè cả chỉnh sửa tay.
+    const overwriteWarn = fmt === 'packingList' && hasContainerData
+      ? '\n\n⚠ Lưu ý: import sẽ GHI ĐÈ toàn bộ cấu trúc kiện đang có, kể cả phần bạn đã sửa tay.'
+      : '';
+
     Alert.alert(
       'Xác nhận nhập',
       fmt === 'entries'
         ? `Nhập ${count} nhật ký sản xuất từ file "${asset.name}"?`
-        : `Nhập ${count} mã hàng từ packing list "${asset.name}"?\nDữ liệu sẽ cập nhật items cho đơn hiện tại.`,
+        : `Nhập ${count} mã hàng từ packing list "${asset.name}"?\nDữ liệu sẽ cập nhật items cho đơn hiện tại.${overwriteWarn}`,
       [
         { text: 'Huỷ', style: 'cancel' },
         {

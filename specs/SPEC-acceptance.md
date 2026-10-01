@@ -28,6 +28,16 @@
 | AC-ITEM-17 | ✅ | **Hạn mức đơn đặt hàng (FEAT-09):** nếu `items.target > 0` thì `SUM(entries.qty)` của mã hàng trong batch `active` **không được vượt** `target`. Thêm nhật ký: nếu `đã làm + qty > target` → `Alert` "Vượt đơn đặt hàng" (nêu `target`, `đã làm`, `còn nhập tối đa`, `vượt`), **không ghi DB**, **không xoá ô nhập** |
 | AC-ITEM-18 | ✅ | **Sửa vượt hạn mức (FEAT-09):** tính `đã làm − qtyCũ + qtyMới > target` → `Alert`, **không lưu**, form sửa **vẫn mở**. Sửa làm **giảm** `qty` luôn được phép, kể cả khi `đã làm = target` |
 | AC-ITEM-19 | ✅ | **Giá trị số không hợp lệ (FEAT-09):** `''`, `'abc'`, `'12abc'`, âm, số thực, ký hiệu khoa học → **không ghi DB**. Chuẩn hoá `' 120 '`/`'1.200'`/`'1 200'` → `1200`. Ô trống vẫn giữ hành vi im lặng của AC-ITEM-05 |
+| AC-ITEM-20 | ✅ | **Bảng tổng theo PO** hiển thị **ngay dưới** 4 ô `SummaryCards`; 4 ô cũ giữ nguyên, không đổi số — *FEAT-12* |
+| AC-ITEM-21 | ✅ | Mỗi dòng hiện PO + 3 số: `Tổng = Σ target`, `Đã sản xuất = Σ produced`, `Còn lại = Σ max(target − produced, 0)` (cùng công thức AC-ITEM-03) |
+| AC-ITEM-22 | ✅ | Mã thuộc **nhiều PO** (`po.split('+').length > 1`) **không** cộng vào PO nào; gom vào **một** dòng `Nhiều PO (n mã)`. `A+B` và `B+A` cùng vào nhóm này |
+| AC-ITEM-23 | ✅ | **Σ cột "Tổng" của mọi dòng == số "Kế hoạch" ở `SummaryCards`** — không cộng trùng, không bỏ sót (INV-D6) |
+| AC-ITEM-24 | ✅ | Có dòng cho **mọi PO trong `allPOs()`**, kể cả PO không có mã thuộc riêng (hiện `0 / 0 / 0`) ⇒ khớp chip lọc PO |
+| AC-ITEM-25 | ✅ | Bảng **không** đổi theo tìm kiếm / chip PO / lọc trạng thái — luôn tính trên **toàn bộ** `items`, giống AC-ITEM-01. Là tham chiếu ổn định của cả đơn |
+| AC-ITEM-26 | ✅ | Dòng sắp `Tổng` **giảm dần**; bằng nhau thì tên PO **tăng dần**. Số dùng `toLocaleString()` như `SummaryCards` |
+| AC-ITEM-27 | ✅ | Bảng cập nhật ngay sau thêm nhật ký, và sau thêm/sửa/xoá mã hàng (FEAT-10/11). `items` rỗng ⇒ hiện `Chưa có mã hàng.` |
+| AC-ITEM-28 | ✅ | `target = 0` không làm vỡ bảng: `Tổng = 0`, `Còn lại = 0`, không chia/phép trừ |
+| AC-ITEM-29 | ✅ | Chỉ dùng token `theme`, không hard-code màu |
 
 ---
 
@@ -89,3 +99,49 @@
 | AC-IMP-11 | 🟡 | `pallets_total` batch = tổng pallets từ `container_data` (fallback 26 từ seed) |
 | AC-IMP-12 | 🟡 | Sau `finishOrder` → archived giữ `container_data`; batch mới reset → fallback seed |
 | AC-IMP-13 | ✅ | **Import vượt hạn mức (FEAT-09):** kiểm tra **tích luỹ** theo thứ tự file; entry làm `đã làm + qty > target` → **bỏ qua**, đếm vào `skippedOver`; `Alert` kết quả báo rõ số mục bị bỏ qua. `ntk` không tồn tại vẫn tính vào `skipped` (không phải `skippedOver`) |
+
+---
+
+## §7.6 Sửa dữ liệu sản phẩm & kiện (FEAT-10)
+
+> Chi tiết: [`features/FEAT-10-edit-items-pallets.md`](features/FEAT-10-edit-items-pallets.md).
+> Khoá pallet dùng **định danh `ntk`** (Q1 = PA A): `${cid}-${no}-${ntk}`. Xem `SPEC-data.md` §5.5.2.
+
+| ID | Trạng thái | Hành vi |
+|---|---|---|
+| AC-EDIT-01 | ✅ | Nút "＋ Thêm mã hàng" trên tab Mã hàng. Form: `ntk` (bắt buộc), `po` (mặc định = PO đang lọc; nếu lọc "Tất cả PO" thì bắt chọn), `target` (bắt buộc) |
+| AC-EDIT-02 | ✅ | Lưu mã hàng mới → có dòng `items` cho batch `active`; danh sách + `order_batches.total_target` cập nhật ngay |
+| AC-EDIT-03 | ✅ | `ntk` đã tồn tại trong batch → chặn, báo "Mã hàng đã tồn tại"; không tạo dòng trùng (PK `(ntk, order_batch_id)`) |
+| AC-EDIT-04 | ✅ | `ntk` rỗng / có khoảng trắng / sai định dạng → chặn. Chỉ nhận `[0-9A-Za-z]+` (khớp AC-ITEM-12 và bộ lọc import) |
+| AC-EDIT-05 | ✅ | `target` không phải số nguyên ≥ 0 → chặn, dùng lại `parseQty` của FEAT-09 |
+| AC-EDIT-06 | ✅ | Sửa `target` xuống dưới số đã sản xuất → **chặn** + báo lỗi (bảo vệ INV-V1 của FEAT-09) |
+| AC-EDIT-07 | ✅ | Sửa `target` **tăng** → cho phép |
+| AC-EDIT-08 | ✅ | Xoá mã hàng: `Alert` xác nhận nêu hậu quả → xoá khỏi `items`, `total_target` giảm, cập nhật ngay |
+| AC-EDIT-09 | ✅ | Xoá mã hàng **đã có nhật ký** (`SUM(qty) > 0`) → **chặn** (INV-D5), hướng dẫn sửa số lượng thay vì xoá |
+| AC-EDIT-10 | ✅ | Xoá mã hàng **đang có trong kiện** → chặn, báo số kiện còn chứa (INV-V2) |
+| AC-EDIT-11 | ✅ | Đang lọc PO A nhưng thêm mã thuộc PO B → vẫn cho phép, hiện cảnh báo "không thuộc PO đang lọc" |
+| AC-EDIT-12 | ✅ | Lọc "Tất cả PO": thao tác chỉ áp dụng cho **đúng mã hàng** được chọn |
+| AC-EDIT-13 | ✅ | Batch `archived` → **không** hiện nút Thêm/Sửa/Xoá (INV-B2) |
+| AC-EDIT-14 | ✅ | Nút "＋ Thêm kiện" trong mỗi container. Form: số hiệu (mặc định `max(no)+1`), các dòng `{ntk, qty}`; `ntk` chỉ chọn được mã trong `items` của batch |
+| AC-EDIT-15 | ✅ | Lưu kiện mới → xuất hiện trong container; `pallets_total` +1; thống kê `done/total`, `%`, `pcs` cập nhật; kiện mới **chưa** tick |
+| AC-EDIT-16 | ✅ | Sửa số lượng một dòng hàng trong kiện → `pcs` cập nhật, **giữ nguyên** trạng thái tick |
+| AC-EDIT-17 | ✅ | Xoá 1 dòng hàng khỏi kiện nhiều loại → tick của các dòng còn lại **không mất** (phụ thuộc Q1; nếu khoá theo chỉ số thì phải cảnh báo mất trạng thái và xác nhận) |
+| AC-EDIT-18 | ✅ | Thêm dòng hàng thứ 2 vào kiện 1 loại đã tick → kiện thành nhiều loại; **không mất** trạng thái tick (phụ thuộc Q1) |
+| AC-EDIT-19 | ✅ | Xoá kiện → `Alert` nêu số pcs mất → gỡ khỏi JSON, `pallets_total` −1, **xoá luôn** dòng `pallet_status` của kiện đó |
+| AC-EDIT-20 | ✅ | Xoá kiện giữa dãy → các kiện còn lại **giữ nguyên số hiệu**, không đánh số lại |
+| AC-EDIT-21 | ✅ | **Đổi số hiệu kiện: cấm ở v1** (tránh phải di chuyển khoá `pallet_status`) |
+| AC-EDIT-22 | ✅ | Chưa có `container_data` (đang dùng seed) → sửa kiện lần đầu sẽ **vật chất hoá** seed vào DB, giữ nguyên `id` `c1`/`c2`/`c3` để không mất trạng thái tick |
+| AC-EDIT-23 | ✅ | Kiện chứa `ntk` không còn trong `items` → vẫn hiển thị, kèm cảnh báo; **không** tự xoá |
+| AC-EDIT-24 | ✅ | `pallet_status` + `container_data` + `pallets_total` ghi trong **cùng một transaction**; JSON hỏng ⇒ rollback, không ghi nửa |
+| AC-EDIT-25 | ✅ | Import lại packing list khi đã sửa kiện tay → `Alert` cảnh báo **sẽ ghi đè toàn bộ** chỉnh sửa kiện, yêu cầu xác nhận |
+| AC-EDIT-26 | ✅ | Thẻ mã hàng có nút `✕ Xoá mã hàng` cạnh nút `✎ Sửa` (xoá trong 1 chạm) — *FEAT-11* |
+| AC-EDIT-27 | ✅ | Bấm nút xoá → `Alert` nhắc **đúng tên mã** → mới xoá thật (INV-U1) |
+| AC-EDIT-28 | ✅ | Bấm **Huỷ** → không xoá, `dataVersion` không tăng |
+| AC-EDIT-29 | ✅ | *(giữ AC-EDIT-09)* Mã đã có nhật ký → vẫn chặn `ITEM_HAS_ENTRIES` từ nút xoá trên thẻ |
+| AC-EDIT-30 | ✅ | *(giữ AC-EDIT-10)* Mã đang có trong kiện → vẫn chặn `ITEM_IN_PALLETS` từ nút xoá trên thẻ |
+| AC-EDIT-31 | ✅ | Xoá thành công → mã biến mất, `total_target` giảm đúng bằng `target` bị xoá |
+| AC-EDIT-32 | ✅ | *(giữ AC-EDIT-13)* Batch `archived` → không hiện nút xoá (INV-B2, INV-V3) |
+| AC-EDIT-33 | ✅ | Nhãn + thông báo nút xoá trên thẻ **giống hệt** nút xoá trong sheet (một hàm dùng chung) |
+| AC-EDIT-34 | ✅ | Cả hai nút dùng cùng bản dịch lỗi: `ITEM_EXISTS`/`ITEM_NOT_FOUND`/`ITEM_HAS_ENTRIES`/`ITEM_IN_PALLETS` |
+| AC-EDIT-35 | ✅ | `ItemCard` không nhận `onDeleteItem` → nút xoá **không** hiện (mặc định an toàn) |
+| AC-EDIT-36 | ✅ | Lọc PO / tìm kiếm / lọc trạng thái không bị lệch sau khi xoá |

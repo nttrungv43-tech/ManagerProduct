@@ -19,7 +19,8 @@ npx expo lint               # lint
 npx tsc --noEmit            # typecheck
 npx expo-doctor             # diagnose dependency and config issues
 npx expo install --fix      # fix incompatible package versions
-npm test                    # unit test hàm thuần (utils/validateQty.js — FEAT-09), không cần Expo/SQLite
+npm test                    # unit test hàm thuần (utils/validateQty.js, utils/palletKey.js), không cần Expo/SQLite
+npm run test:pallet         # chỉ test khoá pallet / remap trạng thái tick (FEAT-10)
 ```
 
 Run lint and typecheck before declaring any task done.

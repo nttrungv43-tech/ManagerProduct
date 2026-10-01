@@ -9,17 +9,26 @@ import FilterChips from '@/components/FilterChips';
 import ProgressBar from '@/components/ProgressBar';
 import PalletRow from '@/components/PalletRow';
 import ArchiveCard from '@/components/ArchiveCard';
+import PalletEditSheet from '@/components/PalletEditSheet';
 
 export default function ContainersScreen() {
   const theme = getTheme(useColorScheme());
-  const { palletDoneMap, togglePallet, finishOrder, archives, activeContainerFilter, setContainerFilter, containerData } = useAppStore();
+  const {
+    items, palletDoneMap, togglePallet, finishOrder, archives,
+    activeContainerFilter, setContainerFilter, containerData,
+    addPallet, updatePallet, removePallet,
+  } = useAppStore();
   const [expandedIds, setExpandedIds] = useState(new Set());
+  // FEAT-10: form thêm/sửa kiện. `draftPallet` = null ⇒ đang thêm mới.
+  const [draft, setDraft] = useState(null); // { containerId, label, pallet, nextNo }
   const containers = containerData || containersData;
   const cpos = [...new Set(containers.map(c => c.po.split('+')).flat())];
   const filtered = containers.filter(
     c => activeContainerFilter === 'all' || c.po.split('+').includes(activeContainerFilter)
   );
   const { done, total } = countPalletsDoneWithData(palletDoneMap, containerData);
+  const itemNtks = items.map(it => it.ntk);
+  const knownNtks = new Set(itemNtks);
 
   function toggleExpand(id) {
     const next = new Set(expandedIds);
@@ -29,6 +38,15 @@ export default function ContainersScreen() {
       next.add(id);
     }
     setExpandedIds(next);
+  }
+
+  function openAddPallet(c) {
+    const nextNo = (c.pallets || []).reduce((m, p) => Math.max(m, p.no), 0) + 1;
+    setDraft({ containerId: c.id, label: c.label, pallet: null, nextNo });
+  }
+
+  function openEditPallet(c, pallet) {
+    setDraft({ containerId: c.id, label: c.label, pallet, nextNo: null });
   }
 
   function handleFinish() {
@@ -64,6 +82,10 @@ export default function ContainersScreen() {
           });
           const pct = c.pallets.length ? Math.round((cDone / c.pallets.length) * 1000) / 10 : 0;
           const isFull = cDone === c.pallets.length;
+          // AC-EDIT-23: kiện chứa mã không còn trong đơn → cảnh báo, không tự xoá.
+          const unknownNtks = [...new Set(
+            c.pallets.flatMap(p => p.items.map(it => it.ntk)).filter(n => !knownNtks.has(n))
+          )];
 
           return (
             <View key={c.id} style={[styles.card, { backgroundColor: theme.card, borderColor: theme.line }]}>
@@ -82,8 +104,16 @@ export default function ContainersScreen() {
                 <Text style={{ color: theme.sub, fontSize: 12 }}>{doneQty}/{totalQty} pcs đã đóng</Text>
                 {isFull && <Text style={{ color: theme.good, fontWeight: '700', fontSize: 12 }}>Sẵn sàng đóng container ✓</Text>}
               </View>
+              {unknownNtks.length > 0 && (
+                <Text style={{ color: theme.warn, fontSize: 11.5, marginTop: 8 }}>
+                  ⚠ Kiện chứa mã không có trong đơn: {unknownNtks.join(', ')}
+                </Text>
+              )}
               {isOpen && (
                 <View style={{ marginTop: 10 }}>
+                  <TouchableOpacity style={styles.addPalletBtn} onPress={() => openAddPallet(c)}>
+                    <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>＋ Thêm kiện</Text>
+                  </TouchableOpacity>
                   {c.pallets.map(p => (
                     <PalletRow
                       key={p.no}
@@ -91,6 +121,8 @@ export default function ContainersScreen() {
                       pallet={p}
                       palletDoneMap={palletDoneMap}
                       onTogglePallet={togglePallet}
+                      onEditPallet={pallet => openEditPallet(c, pallet)}
+                      onDeletePallet={pallet => openEditPallet(c, pallet)}
                       theme={theme}
                     />
                   ))}
@@ -115,6 +147,21 @@ export default function ContainersScreen() {
             {archives.map(a => <ArchiveCard key={a.id} archive={a} theme={theme} />)}
           </>
         )}
+
+        {draft && (
+          <PalletEditSheet
+            containerLabel={`📦 ${draft.label}`}
+            pallet={draft.pallet}
+            itemOptions={itemNtks}
+            defaultNo={draft.nextNo}
+            onClose={() => setDraft(null)}
+            onSubmit={draft.pallet
+              ? payload => updatePallet(draft.containerId, draft.pallet.no, payload)
+              : payload => addPallet(draft.containerId, payload)}
+            onDelete={no => removePallet(draft.containerId, no)}
+            theme={theme}
+          />
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -128,6 +175,7 @@ const styles = StyleSheet.create({
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   numsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 9 },
   finishBox: { borderWidth: 1.5, borderStyle: 'dashed', borderRadius: 6, padding: 14, marginVertical: 16 },
+  addPalletBtn: { paddingVertical: 8 },
   finishBtn: { padding: 13, borderRadius: 4, alignItems: 'center' },
   archiveHead: { fontSize: 13, fontWeight: '700', marginBottom: 8 },
 });

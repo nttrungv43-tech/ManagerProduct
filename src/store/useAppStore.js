@@ -38,6 +38,13 @@ export const useAppStore = create((set, get) => ({
     set({ items });
   },
 
+  refreshContainerData: async () => {
+    const { batchId } = get();
+    const containerData = await q.fetchContainerData(batchId);
+    const palletDoneMap = await q.fetchPalletStatus(batchId);
+    set({ containerData, palletDoneMap });
+  },
+
   addEntry: async (ntk, payload) => {
     const { batchId } = get();
     const res = await q.addEntry(batchId, ntk, payload);
@@ -59,6 +66,64 @@ export const useAppStore = create((set, get) => ({
     await q.removeEntry(entryId);
     await get().refreshItems();
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
+  },
+
+  // ---------- ITEMS CRUD (FEAT-10) ----------
+
+  addItem: async (payload) => {
+    const { batchId } = get();
+    const res = await q.addItem(batchId, payload);
+    if (res && res.ok === false) return res;
+    await get().refreshItems();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return { ok: true };
+  },
+
+  updateItem: async (ntk, payload) => {
+    const { batchId } = get();
+    const res = await q.updateItem(batchId, ntk, payload);
+    if (res && res.ok === false) return res;
+    await get().refreshItems();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return { ok: true };
+  },
+
+  removeItem: async (ntk) => {
+    const { batchId } = get();
+    const res = await q.removeItem(batchId, ntk);
+    if (res && res.ok === false) return res;
+    await get().refreshItems();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return { ok: true };
+  },
+
+  // ---------- PALLETS CRUD (FEAT-10) ----------
+
+  addPallet: async (containerId, payload) => {
+    const { batchId } = get();
+    const res = await q.addPallet(batchId, containerId, payload);
+    if (res && res.ok === false) return res;
+    await get().refreshContainerData();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return { ok: true };
+  },
+
+  updatePallet: async (containerId, palletNo, payload) => {
+    const { batchId } = get();
+    const res = await q.updatePallet(batchId, containerId, palletNo, payload);
+    if (res && res.ok === false) return res;
+    await get().refreshContainerData();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return { ok: true };
+  },
+
+  removePallet: async (containerId, palletNo) => {
+    const { batchId } = get();
+    const res = await q.removePallet(batchId, containerId, palletNo);
+    if (res && res.ok === false) return res;
+    await get().refreshContainerData();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return { ok: true };
   },
 
   togglePallet: async (key, currentlyDone) => {

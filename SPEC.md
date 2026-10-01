@@ -19,7 +19,7 @@
 
 | Mục | Giá trị |
 |---|---|
-| Phiên bản spec | 1.4 (modular) |
+| Phiên bản spec | 1.5 (modular) |
 | Nền tảng | Expo SDK 57 (Expo Router `src/app/`) + `expo-sqlite` + `zustand` |
 | Chế độ | 100% offline, một thiết bị, không server |
 | Ngôn ngữ | Tiếng Việt |
@@ -53,6 +53,9 @@ Xem đầy đủ trong [`SPEC-reference.md`](SPEC-reference.md) §12:
 | FEAT-01 | ✅ Form sửa nhật ký |
 | FEAT-08 | ✅ items/entries; 🟡 container/pallet |
 | FEAT-09 | ✅ Hạn mức đơn đặt hàng + validate dữ liệu số |
+| FEAT-10 | ✅ Thêm/sửa/xoá sản phẩm, số lượng, kiện |
+| FEAT-11 | ✅ Nút xoá mã hàng trực tiếp trên thẻ (Cấp 1, UI-only) |
+| FEAT-12 | ✅ Bảng tổng số lượng theo từng PO (Cấp 1, dữ liệu dẫn xuất) |
 | FEAT-02..07 | 📋 Backlog |
 
 ---
