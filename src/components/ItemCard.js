@@ -5,15 +5,56 @@ import { Picker } from '@react-native-picker/picker';
 import ProgressBar from '@/components/ProgressBar';
 import EntryLogRow from '@/components/EntryLogRow';
 import { pctClass } from '@/store/useAppStore';
-import { fetchEntriesForItem } from '@/db/queries';
+import { fetchEntriesForLine } from '@/db/queries';
 import {
   parseQty, formatQtyError,
   INVALID_QTY_TITLE, INVALID_QTY_MESSAGE, OVER_TARGET_TITLE,
 } from '@/utils/validateQty';
 // FEAT-11: xoá mã trong 1 chạm. Dùng chung helper với nút trong ItemEditSheet (AC-EDIT-33/34).
 import { confirmDeleteItem } from '@/utils/deleteItem';
+// BUG-02: ngày cục bộ, không dùng `toISOString` (giờ UTC).
+import { todayLocal } from '@/utils/date';
 
 const COLOR_BY_CLASS = { ok: 'good', mid: 'warn', low: 'bad' };
+
+// FEAT-17: định dạng số kiểu Việt Nam, giữ tối đa 2 chữ số thập phân và bỏ số `0` vô nghĩa.
+// `null`/`undefined` ⇒ không hiển thị (INV-I1) — KHÔNG thay bằng 0.
+function fmtMetric(value, unit) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return `${n.toLocaleString('vi-VN', { maximumFractionDigits: 2 })}${unit}`;
+}
+
+/** Các nhãn sẽ hiển thị; mảng rỗng = mã này không có dữ liệu packing list ⇒ ẩn cả dòng. */
+function metricParts(item) {
+  const fields = [
+    ['KL: ', item.nw_kg, ' kg'],
+    ['TKL: ', item.gw_kg, ' kg'],
+    ['Thể tích: ', item.volume_cbm, ' m³'],
+    ['Kiện: ', item.package_count, ' kiện'],
+  ];
+  const parts = [];
+  for (const [label, value, unit] of fields) {
+    const text = fmtMetric(value, unit);
+    if (text) parts.push(`${label}${text}`);
+  }
+  return parts;
+}
+
+function hasPackingMetrics(item) {
+  return metricParts(item).length > 0;
+}
+
+
+/**
+ * FEAT-21 — không còn ghi chú nào dưới tiêu đề PO.
+ *
+ * Bản cũ phải giải thích `isSplit` / `mergedMultiPo` / `productionUnknown` vì số liệu được tính
+ * theo **mã** còn thẻ tách theo **PO** ⇒ số trên thẻ có thể không phải của riêng PO đó. Ở thiết kế
+ * mới, thẻ **chính là** một dòng đơn hàng (PO × mã) và sản lượng được gắn thẳng vào nó, nên mọi
+ * con số hiển thị đều là của riêng PO đó — không cần cảnh báo nữa.
+ */
 
 // FEAT-11: `onDeleteItem` là prop TUỲ CHỌN — không truyền thì nút xoá không hiện (AC-EDIT-35).
 export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDeleteEntry, onEditItem, onDeleteItem }) {
@@ -38,7 +79,7 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
   const pctColor = theme[COLOR_BY_CLASS[cls]];
 
   async function loadEntries() {
-    const rows = await fetchEntriesForItem(item.order_batch_id, item.ntk);
+    const rows = await fetchEntriesForLine(item.order_line_id);
     setEntries(rows);
   }
 
@@ -64,6 +105,7 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
     Alert.alert(OVER_TARGET_TITLE, formatQtyError(error, item.ntk));
   }
 
+
   async function handleAdd() {
     const qRes = readNumber(qty);
     const dRes = readNumber(defectQty);
@@ -73,8 +115,8 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
     const dq = dRes.value;
     if (q <= 0 && dq <= 0) return;
     const types = Object.keys(defectTypes).filter(k => defectTypes[k]);
-    const res = await onAddEntry(item.ntk, {
-      date: new Date().toISOString().slice(0, 10),
+    const res = await onAddEntry(item.order_line_id, {
+      date: todayLocal(),
       qty: q, line, defectQty: dq, defectTypes: dq > 0 ? types : [],
     });
     // Vượt đơn đặt hàng: giữ nguyên ô nhập để người dùng sửa lại.
@@ -165,6 +207,16 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
         <Text style={[styles.numTxt(theme), { color: theme.bad }]}>Lỗi: {item.defect || 0}</Text>
       </View>
 
+      {/* FEAT-17 (AC-NEW-05/06): 4 trường từ packing list. `NULL` = không có dữ liệu ⇒ ẩn,
+          không hiện `0` giả (INV-I1). */}
+      {hasPackingMetrics(item) && (
+        <View style={[styles.numsRow, { marginTop: 4 }]}>
+          {metricParts(item).map(part => (
+            <Text key={part} style={styles.numTxt(theme)}>{part}</Text>
+          ))}
+        </View>
+      )}
+
       {(onEditItem || onDeleteItem) && (
         <View style={styles.editRow}>
           {onEditItem && (
@@ -190,6 +242,8 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
       {expanded && (
         <View>
           <Text style={styles.sectionLabel(theme)}>Nhập sản xuất hôm nay</Text>
+          {/* FEAT-20: nói rõ nhật ký sẽ được ghi cho PO nào — người dùng không phải đoán. */}
+          <Text style={[styles.hint, { color: theme.sub }]}>Ghi cho PO {item.po}</Text>
           <TextInput
             style={styles.input(theme)}
             keyboardType="numeric"
@@ -318,6 +372,9 @@ const styles = StyleSheet.create({
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   title: { fontSize: 16, fontWeight: '700' },
   numsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 9 },
+  // FEAT-19: ghi chú nhỏ dưới PO (sản lượng dùng chung / chưa tách được theo PO).
+  note: { fontSize: 10.5, marginTop: 2, fontStyle: 'italic' },
+  hint: { fontSize: 11, marginBottom: 6 },
   editRow: { marginTop: 10, alignSelf: 'flex-start', flexDirection: 'row', gap: 16 },
   editBtn: { flexDirection: 'row' },
   numTxt: (theme) => ({ color: theme.sub, fontSize: 12 }),

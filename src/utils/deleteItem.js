@@ -35,7 +35,8 @@ export const ITEM_ERROR_MESSAGES = {
     `Mã ${e.ntk} còn nằm trong ${e.pallets} kiện.\nHãy xoá hoặc sửa kiện trước.`,
 };
 
-const GENERIC_ERROR = 'Có lỗi xảy ra. Vui lòng thử lại.';
+/** Thông báo chung khi mã lỗi lạ hoặc thiếu — dùng chung cho mọi thao tác xoá. */
+export const GENERIC_ERROR = 'Có lỗi xảy ra. Vui lòng thử lại.';
 
 /**
  * Dịch mã lỗi của `queries.js` sang thông điệp tiếng Việt.

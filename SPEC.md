@@ -19,7 +19,7 @@
 
 | Mục | Giá trị |
 |---|---|
-| Phiên bản spec | 1.5 (modular) |
+| Phiên bản spec | 1.17 (modular) |
 | Nền tảng | Expo SDK 57 (Expo Router `src/app/`) + `expo-sqlite` + `zustand` |
 | Chế độ | 100% offline, một thiết bị, không server |
 | Ngôn ngữ | Tiếng Việt |
@@ -49,14 +49,30 @@ Xem đầy đủ trong [`SPEC-reference.md`](SPEC-reference.md) §12:
 | F-HIST | ✅ |
 | F-APP | ✅ |
 | F-IMPORT | ✅ items/entries; 🟡 container/pallet |
-| BUG-01/02/03 | ⏳ P0/P1 (cần chỉ đạo Cấp 3) |
 | FEAT-01 | ✅ Form sửa nhật ký |
 | FEAT-08 | ✅ items/entries; 🟡 container/pallet |
 | FEAT-09 | ✅ Hạn mức đơn đặt hàng + validate dữ liệu số |
 | FEAT-10 | ✅ Thêm/sửa/xoá sản phẩm, số lượng, kiện |
 | FEAT-11 | ✅ Nút xoá mã hàng trực tiếp trên thẻ (Cấp 1, UI-only) |
 | FEAT-12 | ✅ Bảng tổng số lượng theo từng PO (Cấp 1, dữ liệu dẫn xuất) |
+| FEAT-13 | ✅ Xoá toàn bộ mã hàng của một PO (Cấp 1, có xem trước + chặn an toàn) |
+| BUG-02/03 | ✅ Hoàn tất đơn hàng: transaction + chống gọi song song + ngày cục bộ |
+| FEAT-14 | ✅ Đơn mới sau khi hoàn tất luôn **trắng** (không nạp dữ liệu mẫu) |
+| FEAT-15 | ✅ Xoá hẳn đơn hàng lưu trữ + ẩn/hiện nội dung (Cấp 3, có `Alert` xác nhận) |
+| BUG-01/04/05 | ✅ Đã sửa (PK pallet, defectTypes, dataVersion) |
+| BUG-07 | ✅ Đã sửa (Nhập JSON: `readAsStringAsync` đã bị xoá → dùng `new File(uri).text()`) |
+| BUG-08 | ✅ Đã sửa (app không khởi động: `getDb()` trả DB chưa migrate → `no such column: nw_kg`) |
+| FEAT-16 | ✅ Converter `packing_data.json` → file app import được (`npm run convert:packing`) + báo lỗi rõ khi sai định dạng |
+| FEAT-17 | ✅ Nhập thẳng `packing_data.json` + hiển thị KL/TKL/thể tích/số kiện theo mỗi mã (migration v3, không breaking) |
+| FEAT-18 | ✅ Số lượng **riêng cho từng PO** kể cả mã dùng chung (`item_po`, migration v4, không breaking) |
+| FEAT-19 | ✅ Tách mã nhiều PO thành từng thẻ riêng (`106167GF` → PO 2922 + PO 2923), không gộp `A+B` (không migration) |
+| FEAT-20 | ✅ **Đã sản xuất / Còn lại theo từng PO** trong bảng "Tổng theo PO" (`entries.po`, migration v5, không breaking) |
 | FEAT-02..07 | 📋 Backlog |
+
+> **Lưu ý khi nhập JSON:** app nhập được **3** định dạng — `entries` (nhật ký sản xuất), packing list phẳng
+> (`總表` + `Column1..Column10`) và **`packing_data.json`** (`schema_version: 1`, FEAT-17).
+> Lệnh `npm run convert:packing` vẫn chạy được để sinh file phẳng dùng đối chiếu/backup.
+> Xem [`FEAT-17`](specs/features/FEAT-17-import-packing-v1.md) và [`FEAT-16`](specs/features/FEAT-16-convert-packing-data-v1.md).
 
 ---
 

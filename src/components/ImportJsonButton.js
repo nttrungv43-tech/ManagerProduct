@@ -2,23 +2,13 @@
 import React, { useState } from 'react';
 import { TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
-
-const SUMMARY_KEY = '\u7e3d\u8868';
-
-function detectFormat(parsed) {
-  if (Array.isArray(parsed)) {
-    const sample = parsed.find(e => typeof e === 'object' && e !== null);
-    return sample && sample.ntk && sample.date ? 'entries' : 'unknown';
-  }
-  if (parsed && typeof parsed === 'object') {
-    if (parsed.entries) return 'entries';
-    if (parsed[SUMMARY_KEY]) return 'packingList';
-    const hasArray = Object.keys(parsed).some(k => Array.isArray(parsed[k]));
-    if (hasArray) return 'packingList';
-  }
-  return 'unknown';
-}
+// BUGFIX-07: `readAsStringAsync` ở gói gốc đã bị xoá (ném lỗi) trong expo-file-system 57.
+// Dùng `File.text()` — https://docs.expo.dev/versions/v54.0.0/sdk/filesystem/
+import { File } from 'expo-file-system';
+import {
+  detectFormat, detectFormatError, estimateImportCount,
+  FORMAT_ENTRIES, FORMAT_PACKING_LIST, FORMAT_PACKING_V1,
+} from '@/utils/importFormat';
 
 export default function ImportJsonButton({ onImport, hasContainerData, theme }) {
   const [loading, setLoading] = useState(false);
@@ -36,8 +26,9 @@ export default function ImportJsonButton({ onImport, hasContainerData, theme }) 
 
     let jsonContent;
     try {
-      jsonContent = await FileSystem.readAsStringAsync(asset.uri);
+      jsonContent = await new File(asset.uri).text();
     } catch (_e) {
+      // Lưới an toàn cuối cùng: URI `file://` chỉ đọc được qua fetch trên một số nền tảng.
       try {
         const response = await fetch(asset.uri);
         jsonContent = await response.text();
@@ -55,38 +46,26 @@ export default function ImportJsonButton({ onImport, hasContainerData, theme }) 
       return;
     }
 
+    // FEAT-16 AC-FMT-01: báo lỗi ngay khi file sai định dạng, kèm cách sửa — thay vì để
+    // `queries.js` ném *"Không tìm thấy mã hàng nào trong file JSON."* sau khi đã bấm Nhập.
     const fmt = detectFormat(parsed);
-    if (fmt === 'unknown') {
-      Alert.alert(
-        'Lỗi định dạng',
-        'File JSON không được nhận diện.\nCần có mảng `entries` (nhật ký sản xuất) hoặc dữ liệu packing list (cot\u7e3d\u8868 / Column4).'
-      );
+    const formatError = detectFormatError(parsed, asset.name);
+    if (formatError) {
+      Alert.alert('Lỗi định dạng', formatError);
       return;
     }
 
-    let count;
-    if (fmt === 'entries') {
-      const entries = Array.isArray(parsed) ? parsed : parsed.entries;
-      count = entries.length;
-    } else {
-      const summary = parsed[SUMMARY_KEY] || Object.values(parsed).find(Array.isArray);
-      if (Array.isArray(summary)) {
-        count = summary.filter(r => r && typeof r === 'object'
-          && r.Column4 && typeof r.Column4 === 'string'
-          && r.Column6 && typeof r.Column6 === 'number' && r.Column6 > 0).length;
-      } else {
-        count = 0;
-      }
-    }
+    const count = estimateImportCount(parsed);
 
     // AC-EDIT-25: batch đã có cấu trúc container ⇒ import sẽ ghi đè cả chỉnh sửa tay.
-    const overwriteWarn = fmt === 'packingList' && hasContainerData
+    // FEAT-17: định dạng mới cũng ghi đè cấu trúc container ⇒ cùng cảnh báo.
+    const overwriteWarn = (fmt === FORMAT_PACKING_LIST || fmt === FORMAT_PACKING_V1) && hasContainerData
       ? '\n\n⚠ Lưu ý: import sẽ GHI ĐÈ toàn bộ cấu trúc kiện đang có, kể cả phần bạn đã sửa tay.'
       : '';
 
     Alert.alert(
       'Xác nhận nhập',
-      fmt === 'entries'
+      fmt === FORMAT_ENTRIES
         ? `Nhập ${count} nhật ký sản xuất từ file "${asset.name}"?`
         : `Nhập ${count} mã hàng từ packing list "${asset.name}"?\nDữ liệu sẽ cập nhật items cho đơn hiện tại.${overwriteWarn}`,
       [
@@ -97,14 +76,20 @@ export default function ImportJsonButton({ onImport, hasContainerData, theme }) 
             setLoading(true);
             try {
               const res = await onImport(jsonContent);
-              if (fmt === 'entries') {
+              if (fmt === FORMAT_ENTRIES) {
                 // FEAT-09: báo riêng số mục bị bỏ qua vì vượt đơn đặt hàng.
                 const over = res.skippedOver > 0
                   ? `\nVượt đơn đặt hàng: ${res.skippedOver} mục bị bỏ qua.`
                   : '';
                 Alert.alert('Hoàn tất', `Đã nhập: ${res.imported} mục.\nBỏ qua: ${res.skipped} mục.${over}`);
               } else {
-                Alert.alert('Hoàn tất', `Đã nhập: ${res.imported} mã hàng.\nContainer: ${res.containers} | Kiện: ${res.pallets}`);
+                // FEAT-17: báo thêm số shipment + cảnh báo mã thuộc nhiều PO (nhãn PO dạng `A+B`).
+                const v1 = fmt === FORMAT_PACKING_V1;
+                const multiPo = v1 && res.multiPoItems > 0
+                  ? `\n${res.multiPoItems} mã thuộc nhiều PO (hiển thị dạng A+B).`
+                  : '';
+                const shipments = v1 && res.shipments ? `\nShipment: ${res.shipments}` : '';
+                Alert.alert('Hoàn tất', `Đã nhập: ${res.imported} mã hàng.\nContainer: ${res.containers} | Kiện: ${res.pallets}${shipments}${multiPo}`);
               }
             } catch (e) {
               Alert.alert('Lỗi', e.message || 'Có lỗi xảy ra khi nhập dữ liệu.');

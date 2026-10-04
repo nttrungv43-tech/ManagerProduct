@@ -44,8 +44,10 @@ export default function PalletEditSheet({
   containerLabel, pallet, itemOptions, defaultNo, onClose, onSubmit, onDelete, theme,
 }) {
   const isEdit = !!pallet;
+  // FEAT-21: cột `pallets.pallet_no`; `pallet.no` là tên của blob JSON đã bị bỏ.
+  const palletNo = pallet?.pallet_no ?? pallet?.no;
   // AC-EDIT-14: khi thêm mới, số hiệu mặc định = max(no) hiện có + 1.
-  const [no, setNo] = useState(pallet ? String(pallet.no) : String(defaultNo || ''));
+  const [no, setNo] = useState(pallet ? String(palletNo) : String(defaultNo || ''));
   const [rows, setRows] = useState(() => initialRows(pallet, itemOptions));
   const [busy, setBusy] = useState(false);
 
@@ -100,7 +102,7 @@ export default function PalletEditSheet({
     const qty = pallet.items.reduce((s, it) => s + it.qty, 0);
     Alert.alert(
       'Xác nhận',
-      `Xoá kiện ${pallet.no}?\nSẽ mất ${qty} pcs khỏi thống kê container. Không thể hoàn tác.`,
+      `Xoá kiện ${palletNo}?\nSẽ mất ${qty} pcs khỏi thống kê container. Không thể hoàn tác.`,
       [
         { text: 'Huỷ', style: 'cancel' },
         {
@@ -109,7 +111,7 @@ export default function PalletEditSheet({
           onPress: async () => {
             setBusy(true);
             try {
-              const res = await onDelete(pallet.no);
+              const res = await onDelete(palletNo);
               if (res && res.ok === false) {
                 Alert.alert('Không xoá được', palletErrorMessage(res.error));
                 return;
@@ -129,7 +131,7 @@ export default function PalletEditSheet({
       <View style={[styles.backdrop, { backgroundColor: '#0006' }]}>
         <View style={[styles.sheet, { backgroundColor: theme.card, borderColor: theme.line }]}>
           <Text style={[styles.title, { color: theme.ink }]}>
-            {isEdit ? `Sửa kiện ${pallet.no}` : 'Thêm kiện'}
+            {isEdit ? `Sửa kiện ${palletNo}` : 'Thêm kiện'}
           </Text>
           <Text style={{ color: theme.sub, fontSize: 12, marginBottom: 4 }}>{containerLabel}</Text>
 

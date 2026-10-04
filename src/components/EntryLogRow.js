@@ -6,11 +6,15 @@ export default function EntryLogRow({ entry, onEdit, onDelete, theme }) {
   const lineLabel = entry.line === 'auto' ? 'Tự động' : 'Thủ công';
   const defectTypes = (entry.defect_types || '').split(',').filter(Boolean);
   const typeLabels = { yellow: 'Thẻ vàng', red: 'Thẻ đỏ', tear: 'Rách bọc' };
+  // FEAT-20 (AC-P9): nhãn PO của nhật ký. `entry.po` rỗng = nhật ký cũ chưa gắn PO — nói rõ để
+  // người dùng biết nháy nào cần gán, không âm thầm coi như đã gắn.
+  const poLabel = (entry.po || '').trim();
 
   return (
     <View style={[styles.row, { borderTopColor: theme.line }]}>
       <Text style={{ color: theme.sub, fontSize: 12, flex: 1 }}>
         {entry.date} — {entry.qty} pcs · {lineLabel}
+        {poLabel ? ` · PO ${poLabel}` : ' · chưa gắn PO'}
         {entry.defect_qty > 0 ? ` · Lỗi ${entry.defect_qty}` : ''}
         {defectTypes.length ? ` (${defectTypes.map(t => typeLabels[t]).join(', ')})` : ''}
       </Text>

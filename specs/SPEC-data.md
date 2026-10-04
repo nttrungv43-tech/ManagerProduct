@@ -16,7 +16,12 @@
 | `total_target`, `total_produced`, `total_defect` | INTEGER | Số tổng, chốt lúc hoàn tất |
 | `pallets_done`, `pallets_total` | INTEGER | Chốt lúc hoàn tất |
 
-**`items`**: mã hàng theo từng batch. PK `(ntk, order_batch_id)`. Cột: `ntk`, `po`, `target`, `order_batch_id`.
+**`items`**: mã hàng theo từng batch. PK `(ntk, order_batch_id)`. Cột: `ntk`, `po`, `target`, `order_batch_id`,
+và **4 cột bổ sung từ migration v3 (FEAT-17)** — xem §5.8.
+
+**`item_po`**: số lượng **riêng của từng PO** (migration v4, FEAT-18). PK `(ntk, po, order_batch_id)`.
+Cột: `ntk`, `po` (một PO đã `TRIM`, không chứa `+`), `qty` (nullable = chưa biết), `order_batch_id`.
+Index: `idx_item_po_batch(order_batch_id, po)`. Chi tiết §5.6b.
 
 **`entries`**: nhật ký sản xuất.
 
@@ -30,8 +35,20 @@
 | `line` | TEXT DEFAULT `'manual'` | `manual` hoặc `auto` |
 | `defect_qty` | INTEGER DEFAULT 0 | |
 | `defect_types` | TEXT DEFAULT `''` | Cách nhau dấu phẩy, ví dụ `'yellow,tear'` |
+| `po` | TEXT nullable | **FEAT-20** (migration v5). PO của nhật ký này. `NULL` = chưa gắn PO (mọi dữ liệu cũ) |
 
-Index: `idx_entries_date(date)`, `idx_entries_ntk(ntk, order_batch_id)`, `idx_entries_batch(order_batch_id)`.
+Index: `idx_entries_date(date)`, `idx_entries_ntk(ntk, order_batch_id)`, `idx_entries_batch(order_batch_id)`,
+`idx_entries_ntk_po(ntk, order_batch_id, po)` (FEAT-20).
+
+> **FEAT-20 — vì sao `po` không có FK và không được suy đoán:** `items.po` chỉ lưu **tập** PO nối bằng
+> `+` (`'2922+2923'`), còn `items.target` là **tổng** ⇒ không thể biết mã đó chia bao nhiêu cho mỗi PO.
+> PO của một nhật ký chỉ biết được khi **người dùng nhập**. Vì vậy:
+> - Cột **nullable**, không `DEFAULT`, không backfill: nhật ký cũ giữ `NULL` (chưa gán) thay vì bịa PO.
+> - Không khai báo FK vì `(ntk, po)` không phải khoá của `entries`; quan hệ đúng là `(ntk, po)` của
+>   `item_po` (FEAT-18) và được kiểm bằng code (`ENTRY_PO_INVALID`) để báo lỗi rõ thay vì FK lạ.
+> - Bất biến INV-D8: mỗi dòng nhật ký thuộc **nhiều nhất một** PO ⇒ `Σ` cột "Đã sản xuất" của bảng
+>   "Tổng theo PO" **không bao giờ vượt** `Σ entries.qty`. Số chưa gắn PO được báo riêng, không gán
+>   tự ý vào PO nào.
 
 **`pallet_status`**: trạng thái đóng kiện.
 
@@ -49,7 +66,7 @@ Index: `idx_entries_date(date)`, `idx_entries_ntk(ntk, order_batch_id)`, `idx_en
 | `data` | TEXT NOT NULL | JSON: mảng containers cùng format `containersData` |
 | `created_at` | TEXT NOT NULL | `YYYY-MM-DD` |
 
-Mỗi batch có **0 hoặc 1** hàng. `finishOrder` không xóa. Import mới → `INSERT OR REPLACE`. Batch mới → fallback seed.
+Mỗi batch có **0 hoặc 1** hàng. `finishOrder` không xóa. Import mới → `INSERT OR REPLACE`. Batch mới sau `finishOrder` → `'[]'` (trắng có chủ ý, **không** fallback seed — FEAT-14).
 
 ---
 
@@ -73,7 +90,7 @@ Khi import packing list, `containerId` (ví dụ `HFMU2620080`) thay thế `c1`/
 
 - Luôn có **đúng một** `order_batches` với `status='active'` (INV-B1).
 - `entries`, `items`, `pallet_status` đều gắn `order_batch_id`.
-- "Hoàn tất" **không copy dữ liệu**: chỉ `UPDATE` → `archived`, `INSERT` batch mới + nạp `seedItems`.
+- "Hoàn tất" **không copy dữ liệu**: chỉ `UPDATE` → `archived`, `INSERT` batch mới **rỗng** (`total_target = 0`, `pallets_total = 0`, `container_data = '[]'`, không `items`) — `FEAT-14`.
 - Lịch sử truy vấn **toàn bộ** `entries` của mọi batch.
 
 ---
@@ -134,9 +151,16 @@ Khi batch chưa có dòng `container_data`, UI đang đọc `containersData` t�
 
 1. `INSERT` `container_data` với JSON của seed — **giữ nguyên `id`** `c1`/`c2`/`c3` để các dòng `pallet_status` đang tồn tại (khoá `c1-1`…) vẫn khớp.
 2. Rồi mới áp dụng thay đổi của người dùng.
-3. Về sau mọi lần đọc/ghi đi qua DB ⇒ dẹp `DEBT-02`/`ADR-06` một phần.
+3. Về sau mọi lần đọc/ghi đều đi qua DB ⇒ dẹp `DEBT-02`/`ADR-06` một phần.
 
-Batch mới sau `finishOrder` vẫn fallback seed (chưa đổi hành vi AC-CONT-07).
+> **FEAT-14 (v1.8):** `finishOrder` **không** tạo batch mới thiếu hàng `container_data` nữa — batch mới được ghi
+> sẵn `container_data = '[]'`. Vì vậy fallback seed ở §5.5.3 **chỉ còn áp dụng cho lần chạy đầu**
+> (`ensureActiveBatch`, `AC-APP-02`) và cho batch cũ tạo trước FEAT-14.
+
+**Quy ước "trống có chủ ý" (`FEAT-14`):** `container_data.data = '[]'` = batch **không có container**
+(đơn mới sau khi hoàn tất) — phân biệt với **chưa có hàng `container_data`** (mới fallback seed).
+Nhờ đó `fetchContainerData` trả `[]` và UI hiện empty state; import packing list ghi đè bằng
+`INSERT OR REPLACE`. Không cần cột/cờ mới ⇒ **không migration**.
 
 ### §5.5.3b Hợp đồng xoá mã hàng (FEAT-10, giữ nguyên ở FEAT-11)
 
@@ -170,6 +194,10 @@ Cả hai phải ghi **cùng transaction** với thay đổi gốc.
 
 ## §5.6 Dữ liệu dẫn xuất: tổng theo PO (FEAT-12)
 
+> ⚠️ **Đã bị FEAT-18 cập nhật** (§5.6b): `items` **không** đủ dữ liệu để tách số lượng của từng PO khi
+> mã thuộc nhiều PO. Từ migration v4, số lượng từng PO lấy từ bảng `item_po`. Phần này giữ lại để mô tả
+> **hành vi cũ**, áp dụng cho mã chưa có dòng trong `item_po` (AC-PO-07).
+>
 > **Không lưu trong DB.** Tính lại từ `items` mỗi lần hiển thị bằng hàm thuần `poSummaries()` (`src/utils/poSummary.js`). Chi tiết: [`features/FEAT-12-po-summary.md`](features/FEAT-12-po-summary.md).
 
 ### §5.6.1 Quy tắc gom nhóm
@@ -198,10 +226,166 @@ Vì mã nhiều PO **không** được cộng vào từng PO, ta luôn có:
 
 ---
 
+## §5.6b Bảng `item_po` — số lượng **riêng của từng PO** (FEAT-18)
+
+> Chi tiết: [`features/FEAT-18-po-per-code.md`](features/FEAT-18-po-per-code.md).
+> **Cái này đã thay đổi §5.6.1/§5.6.3** — từ FEAT-18, "tổng theo PO" **không còn chỉ dẫn xuất
+> từ `items`**: mã thuộc nhiều PO đã có số lượng riêng cho từng PO.
+
+### §5.6b.1 Vấn đề `items` không giải được
+
+`items.po` chỉ lưu **tập** PO nối bằng `+` (`'2924+2929'`), còn `items.target` là **tổng** của
+cả tập. Không có đường để biết `2924` chiếm bao nhiêu trong tổng đó. Hậu quả đo được trên
+`src/data/Dmac.json`: PO `2924` và `2929` không còn mã nào thuộc riêng ⇒ cột `Tổng` của bảng PO
+bằng **0** dù đơn có 64 mã / 51.568 pcs.
+
+### §5.6b.2 Schema
+
+```sql
+CREATE TABLE IF NOT EXISTS item_po (
+  ntk TEXT NOT NULL,
+  po TEXT NOT NULL,
+  qty INTEGER,
+  order_batch_id INTEGER NOT NULL,
+  PRIMARY KEY (ntk, po, order_batch_id)
+);
+CREATE INDEX IF NOT EXISTS idx_item_po_batch ON item_po(order_batch_id, po);
+```
+
+| Cột | Ràng buộc | Ý nghĩa |
+|---|---|---|
+| `ntk` | `NOT NULL`, PK | mã hàng |
+| `po` | `NOT NULL`, PK | **một** PO, đã `TRIM()`, **không** chứa `+` |
+| `qty` | nullable | số lượng **của riêng PO này**; `NULL` = chưa biết (mã đa PO chưa tách được) |
+| `order_batch_id` | `NOT NULL`, PK | thuộc đơn nào — cùng mã ở 2 đơn là 2 bộ dòng độc lập |
+
+> PK gồm `order_batch_id` vì `items` cũng khoá theo `(ntk, order_batch_id)`: một mã có thể xuất
+> hiện ở nhiều đơn với số lượng khác nhau. Index `(order_batch_id, po)` phục vụ truy vấn
+> "tổng theo PO" của một đơn.
+
+### §5.6b.3 Migration v4 — loại **bổ sung**
+
+`db/schema.js` 🔒 **không** sửa: cài mới chạy v1 → v2 → v3 → v4 nên cùng đường với nâng cấp.
+
+Backfill chỉ làm được với mã thuộc **một** PO (`qty = target` chính xác):
+
+```sql
+INSERT OR IGNORE INTO item_po (ntk, po, qty, order_batch_id)
+SELECT ntk, TRIM(po), target, order_batch_id
+FROM items
+WHERE po IS NOT NULL AND TRIM(po) <> '' AND INSTR(po, '+') = 0
+```
+
+| Trường hợp | Kết quả backfill | Lý do |
+|---|---|---|
+| `po = '2923'` | 1 dòng, `qty = target` | suy ra chính xác |
+| `po = ' 2922 '` | 1 dòng, `po = '2922'` | `TRIM()` chuẩn hoá khoảng trắng thừa |
+| `po = '2924+2929'` | **không** có dòng | không tách được ⇒ UI rơi về hành vi cũ (AC-PO-07) |
+| `po = ''` hoặc `NULL` | **không** có dòng | không phải PO hợp lệ |
+
+`CREATE TABLE IF NOT EXISTS` + `INSERT OR IGNORE` ⇒ chạy lại v4 bao nhiêu lần cũng không lỗi, không
+nhân bản dòng. Đã kiểm bằng **SQLite thật** (`scripts/test-migrations.mjs`).
+
+### §5.6b.4 Bất biến mới (thay thế cách hiểu cũ ở §5.6.3)
+
+```
+Σ(qty của mọi dòng item_po của 1 batch) == Σ target của items của batch đó
+```
+
+Tức PO nào **không** có dòng nào thì `Tổng` của PO đó bằng `0` — **không** phải `NULL`, và bảng PO
+vẫn cộng đúng tổng toàn đơn. Đây là hệ quả bắt buộc, không phải lỗi (giống AC-DEL-09).
+
+## §5.7 Dữ liệu: xoá mã hàng theo PO (FEAT-13)
+
+> Chi tiết: [`features/FEAT-13-delete-items-by-po.md`](features/FEAT-13-delete-items-by-po.md).
+
+### §5.7.1 Không cần bảng/cột/index mới
+
+| Đối tượng | Schema? | Cách thực hiện |
+|---|---|---|
+| `items` | ❌ | `DELETE ... WHERE order_batch_id = ? AND ntk IN (?,…)` trên PK `(ntk, order_batch_id)` sẵn có |
+| `order_batches.total_target` | ❌ | `recalcBatchTargetInTx()` — **cùng transaction** (giống §5.5.5) |
+| `entries` | ❌ | **không** đụng — mã có nhật ký bị chặn xoá ⇒ không cần `DELETE entries` (INV-D5) |
+| `container_data`, `pallet_status` | ❌ | **không** đụng — mã còn trong kiện bị chặn xoá ⇒ **không cần** remap khoá pallet (INV-P1 không liên quan) |
+
+⇒ **Không migration.** Dữ liệu cũ không bị ảnh hưởng: mọi thao tác xoá đều kiểm tra trước.
+
+### §5.7.2 Quy tắc lọc mã theo PO
+
+- Khớp PO khi `splitPo(items.po)` **chứa** PO đang chọn — giống hệt `allPOs()`/`filteredItems()` (AC-ITEM-13).
+- **Không** lọc bằng SQL `LIKE '%PO%'`: `+` là ký tự đại diện của `LIKE` ⇒ dễ khớp sai.
+- PO truyền vào phải là **một PO đơn lẻ**; chuỗi có `+` trả `INVALID_PO`.
+
+### §5.7.3 Tính lại tổng
+
+| Tổng | Công thức | Ghi khi |
+|---|---|---|
+| `order_batches.total_target` | `SUM(items.target)` của batch | trong **cùng transaction** với `DELETE` |
+
+Nhờ vậy `Σ` bảng `Tổng theo PO` (INV-D6) và ô `Kế hoạch` (AC-ITEM-01) luôn khớp sau mỗi lần xoá.
+
+---
+
+## §5.8 Dữ liệu mỗi mã hàng từ packing list `schema_version 1` (FEAT-17)
+
+> Chi tiết: [`features/FEAT-17-import-packing-v1.md`](features/FEAT-17-import-packing-v1.md).
+
+Nguồn `shipments[].item_summary[]` có 4 trường mà định dạng phẳng (`總表`) **không** mang được.
+Định dạng mới được import **trực tiếp**, nên lưu 4 trường này vào `items`:
+
+| Cột | Kiểu | Nguồn | Quy tắc |
+|---|---|---|---|
+| `nw_kg` | REAL NULL | `item_summary[].nw_kg` | Σ theo mã, làm tròn **1** chữ số thập phân |
+| `gw_kg` | REAL NULL | `item_summary[].gw_kg` | Σ theo mã, làm tròn **1** chữ số thập phân |
+| `volume_cbm` | REAL NULL | `item_summary[].volume_cbm` | Σ theo mã, làm tròn **2** chữ số thập phân |
+| `package_count` | INTEGER NULL | `item_summary[].package_count` | Σ theo mã |
+
+### §5.8.1 Ràng buộc
+
+| ID | Ràng buộc |
+|---|---|
+| **INV-I1** | `NULL` = **không có dữ liệu** (mã thêm tay, hoặc import định dạng cũ). UI **ẩn** dòng thông tin — **không** hiển thị `0` |
+| **INV-I2** | 4 cột này là **chỉ đọc** — nguồn sự thật là packing list. `addItem`/`updateItem`/`ItemEditSheet` **không** sửa chúng |
+| **INV-I3** | Σ của mỗi cột mới phải khớp `Σ item_summary` của nguồn cho mã đó (đã kiểm chứng nguồn: 174/174 dòng khớp với tổng từ `packages[].items[]`) |
+| **INV-I4** | Import định dạng mới là **all-or-nothing**: có `problem` chặn ⇒ **0** lệnh ghi DB |
+
+### §5.8.2 Migration v3
+
+```js
+// src/db/migrations.js — thêm SAU v2. Không sửa migration v1/v2 đã phát hành (nguyên tắc #2).
+{
+  version: 3,
+  up: async (db) => {
+    // BUGFIX-08: `ADD COLUMN` không idempotent (chạy lại ⇒ "duplicate column name"), và
+    // `ALTER` không nằm trong transaction nên app bị tắt giữa lúc chạy có thể thêm được một
+    // phần cột. `ensureItemMetricColumns` đọc `PRAGMA table_info(items)` và chỉ thêm còn thiếu.
+    const result = await ensureItemMetricColumns(db);
+    // Vá chưa xong ⇒ **không** đóng dấu `user_version = 3` (số phiên bản phải phản ánh
+    // schema thật — nếu không, v3 sẽ không bao giờ chạy lại ⇒ `no such column` vĩnh viễn).
+    if (!result.ok) throw new Error(`… còn thiếu: ${result.missing.join(', ')}`);
+  },
+}
+```
+
+| Tiêu chí | Kết luận |
+|---|---|
+| Loại migration | **Bổ sung** — không `DROP`, không `ALTER` phá huỷ, không đổi PK/index, không cần bảng tạm |
+| `db/schema.js` 🔒 | **không** sửa `CREATE_TABLES_SQL`: cài mới chạy v1 → v2 → v3 nên cùng đường với nâng cấp |
+| DB cũ (`user_version = 2`) | 4 cột mới = `NULL`; mọi dữ liệu cũ nguyên vẹn; app cũ vẫn mở được (chỉ không thấy trường mới) |
+| Có breaking change DB? | **Không** |
+
+> **⚠️ `user_version` là ý định, không phải sự thật (BUGFIX-08).** Nếu DB bị đóng dấu `user_version = 3`
+> trong khi `ALTER TABLE` chưa từng có hiệu lực (app bị tắt giữa lúc chạy), thì `runMigrations` bỏ qua v3
+> **vĩnh viễn** (`3 > 3` là sai) và mọi `SELECT` tới cột mới đều hỏng. Vì vậy `getDb()` gọi thêm
+> **schema guard** `ensureItemMetricColumns()` (`src/utils/schemaColumns.js`) **sau** `runMigrations`:
+> đọc `PRAGMA table_info(items)`, thêm cột còn thiếu, rồi **đọc lại** `PRAGMA` để xác minh bằng quan sát.
+> Guard **không** đọc `user_version`, idempotent, và chỉ `ADD COLUMN` — không đụng dữ liệu.
+
+---
+
 ## §10.1 Phân cấp thay đổi
 
 | Cấp | Loại | Ví dụ | Yêu cầu |
-|---|---|---|---|
 | **0** | Văn bản/kiểu dáng | Sửa chữ, chỉnh khoảng cách | Checklist nhanh |
 | **1** | Thêm mới | Thêm component, hàm query mới | Spec + checklist hồi quy |
 | **2** | Thay đổi dữ liệu | Thêm bảng/cột/index | Cấp 1 + migration + kiểm thử nâng cấp |
@@ -214,6 +398,11 @@ Vì mã nhiều PO **không** được cộng vào từng PO, ta luôn có:
 ## §10.2 Quy trình migration
 
 > **FEAT-10 đã cài đặt** cơ chế version bằng `PRAGMA user_version` trong `src/db/migrations.js`, gọi từ `getDb()` (`src/db/index.js`) **trước** mọi truy vấn. Cài mới và nâng cấp đều đi cùng một đường: `CREATE TABLE IF NOT EXISTS` (v1) → `PRAGMA user_version = 2` (v2). Cài mới: `pallet_status` rỗng nên v2 không làm gì. Nâng cấp: v2 đọc `pallet_status` cũ và `container_data` (nạp seed tĩnh nếu batch cũ chưa có) để ánh xạ khoá theo `ntk`.
+
+> **v3 (FEAT-17):** bổ sung 4 cột `items` bằng `ALTER TABLE … ADD COLUMN … DEFAULT NULL` — xem §5.8.2.
+> Cài mới cũng qua v3, nên **không** sửa `CREATE_TABLES_SQL` (`db/schema.js` 🔒).
+> **BUGFIX-08:** thêm **schema guard** chạy **sau** `runMigrations` để xác minh schema thật bằng
+> `PRAGMA table_info` và vá phần thiếu — **không** tin `user_version` (xem cảnh báo §5.8.2).
 
 **Bảng sao lưu (đường lùi):** trước khi `DROP TABLE pallet_status`, migration sao lưu nguyên bản cũ vào `pallet_status_bak_v1` (chỉ ghi lần đầu, không đè bản sao cũ). Không xoá sau khi thành công — giữ lại để đối chiếu.
 

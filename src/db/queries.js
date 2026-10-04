@@ -1,861 +1,903 @@
 // src/db/queries.js
+// FEAT-21 — Lớp truy vấn trên **thiết kế DB mới** (xem specs/PLAN-db-redesign.md).
+//
+// ============================================================================
+// ĐỔI HỆT KHỐI SO VỚI BẢN CŨ
+// ============================================================================
+// Bản cũ đọc/ghi `items(po = '2922+2923')` + `entries(ntk)` + `item_po` + `pallet_status` +
+// `container_data` (blob JSON). Bản này đọc/ghi 9 bảng quan hệ với nguyên tử là
+// `order_lines` = (PO × mã hàng). Ba điều đổi hệt:
+//
+//  1. **Không còn `fetchItemPoRows`/`splitItemRows`.** Bản cũ phải tự tách thẻ vì `items` lưu
+//     nhiều PO trong một chuỗi (FEAT-19). Ở đây mỗi `order_lines` **đã là** một (PO × mã) ⇒ không
+//     có gì để tách.
+//  2. **Không còn trạng thái "chưa gắn PO".** Bản cũ cần `entries.po` nullable và cảnh báo
+//     "chưa gắn PO" (FEAT-20). Ở đây `production_entries.order_line_id` **NOT NULL** ⇒ mọi nhật
+//     ký luôn thuộc đúng một PO, và `ENTRY_PO_INVALID` không còn tồn tại vì PO là FK.
+//  3. **Không còn `fetchPalletStatus`/`remapPalletStatus`.** Trạng thái tick là cột
+//     `pallet_lines.done` ⇒ thêm/xoá dòng hàng trong kiện không làm mất tick (hết INV-P1/BUG-01).
+//
+// Hợp đồng với UI **giữ nguyên** để pha UI gọn: hàm trả `{ ok: false, error: { code, … } }` thay vì
+// ném lỗi, và mã lỗi giữ đúng tập cũ (trừ `ENTRY_PO_INVALID` vốn không còn khả năng xảy ra).
+
 import { getDb, getActiveBatchId } from './index';
-import { containersData, seedItems } from '@/data/seed';
 import { checkQtyLimit, parseQty } from '@/utils/validateQty';
-import {
-  palletKey, isMultiItemPallet, remapPalletStatus, recalcPalletTotals,
-} from '@/utils/palletKey';
+import { todayLocal } from '@/utils/date';
+import { buildImportPlanV2 } from '@/utils/packingV2Import';
 
-const NTK_RE = /^[0-9A-Za-z]+$/;
+// ── helpers ──────────────────────────────────────────────────────────────────
 
-// ---------- ITEMS ----------
+/** Chuẩn hoá kết quả `{ok,error}` — hàm nào trả lỗi đều đi qua đây. */
+const fail = (code, extra = {}) => ({ ok: false, error: { code, ...extra } });
+const done = (extra = {}) => ({ ok: true, ...extra });
 
-export async function fetchItemsWithStats(batchId) {
-  const db = await getDb();
-  const items = await db.getAllAsync(
-    `SELECT ntk, po, target FROM items WHERE order_batch_id = ? ORDER BY ntk`,
-    [batchId]
-  );
-  const stats = await db.getAllAsync(
-    `SELECT ntk, SUM(qty) as produced, SUM(defect_qty) as defect
-     FROM entries WHERE order_batch_id = ? GROUP BY ntk`,
-    [batchId]
-  );
-  const statMap = {};
-  stats.forEach(s => { statMap[s.ntk] = s; });
-  return items.map(it => ({
-    ...it,
-    order_batch_id: batchId,
-    produced: statMap[it.ntk]?.produced || 0,
-    defect: statMap[it.ntk]?.defect || 0,
-  }));
-}
+/** `NULL` → 0; tránh `null` lọt vào phép tính JS và thành NaN trên màn hình. */
+const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-export async function fetchEntriesForItem(batchId, ntk) {
-  const db = await getDb();
-  return db.getAllAsync(
-    `SELECT * FROM entries WHERE order_batch_id = ? AND ntk = ? ORDER BY id DESC`,
-    [batchId, ntk]
-  );
-}
-
-// ---------- ENTRIES: kiểm tra hạn mức đơn đặt hàng (FEAT-09, INV-V1) ----------
-
-/**
- * Hạn mức (items.target) và số lượng đã sản xuất (SUM(entries.qty)) của một mã hàng.
- * `excludeEntryId`: bỏ qua dòng đang sửa để tính "đã làm" như thể nó chưa tồn tại.
- */
-export async function getItemTargetUsage(batchId, ntk, excludeEntryId = null) {
-  const db = await getDb();
-  const item = await db.getFirstAsync(
-    `SELECT target FROM items WHERE ntk = ? AND order_batch_id = ?`,
-    [ntk, batchId]
-  );
-  const target = item?.target ?? 0;
-
-  let sql = `SELECT COALESCE(SUM(qty), 0) as produced
-             FROM entries WHERE ntk = ? AND order_batch_id = ?`;
-  const params = [ntk, batchId];
-  if (excludeEntryId !== null && excludeEntryId !== undefined) {
-    sql += ` AND id != ?`;
-    params.push(excludeEntryId);
-  }
-  const row = await db.getFirstAsync(sql, params);
-  const produced = row?.produced || 0;
-  const hasLimit = target > 0;
-  return { target, produced, remaining: hasLimit ? Math.max(target - produced, 0) : 0, hasLimit };
-}
-
-export async function addEntry(batchId, ntk, { date, qty, line, defectQty, defectTypes }) {
-  const db = await getDb();
-  const usage = await getItemTargetUsage(batchId, ntk);
-  const check = checkQtyLimit({ ...usage, incomingQty: qty });
-  if (!check.ok) return { ok: false, error: check };
-
-  await db.runAsync(
-    `INSERT INTO entries (ntk, order_batch_id, date, qty, line, defect_qty, defect_types)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [ntk, batchId, date, qty, line || 'manual', defectQty || 0, (defectTypes || []).join(',')]
-  );
-  return { ok: true };
-}
-
-export async function updateEntry(entryId, { date, qty, line, defectQty, defectTypes }) {
-  const db = await getDb();
-  const current = await db.getFirstAsync(
-    `SELECT ntk, order_batch_id FROM entries WHERE id = ?`,
-    [entryId]
-  );
-  if (!current) return { ok: false, error: { ok: false, code: 'ENTRY_NOT_FOUND' } };
-
-  const usage = await getItemTargetUsage(current.order_batch_id, current.ntk, entryId);
-  const check = checkQtyLimit({ ...usage, incomingQty: qty });
-  if (!check.ok) return { ok: false, error: check };
-
-  await db.runAsync(
-    `UPDATE entries SET date = ?, qty = ?, line = ?, defect_qty = ?, defect_types = ? WHERE id = ?`,
-    [date, qty, line || 'manual', defectQty || 0, (defectTypes || []).join(','), entryId]
-  );
-  return { ok: true };
-}
-
-export async function removeEntry(entryId) {
-  const db = await getDb();
-  await db.runAsync(`DELETE FROM entries WHERE id = ?`, [entryId]);
-}
-
-// ---------- ITEMS CRUD (FEAT-10) ----------
-
-function normalizeNtk(raw) {
-  if (typeof raw !== 'string') return null;
-  const ntk = raw.trim();
-  return NTK_RE.test(ntk) ? ntk : null;
-}
-
-async function recalcBatchTargetInTx(db, batchId) {
-  const row = await db.getFirstAsync(
-    `SELECT COALESCE(SUM(target), 0) as total FROM items WHERE order_batch_id = ?`,
-    [batchId]
-  );
-  await db.runAsync(
-    `UPDATE order_batches SET total_target = ? WHERE id = ?`,
-    [row?.total || 0, batchId]
-  );
-}
-
-export async function recalcBatchTarget(batchId) {
-  const db = await getDb();
-  await recalcBatchTargetInTx(db, batchId);
-}
-
-export async function addItem(batchId, { ntk, po, target }) {
-  const db = await getDb();
-  const code = normalizeNtk(ntk);
-  if (!code) return { ok: false, error: { code: 'INVALID_NTK' } };
-  const t = parseQty(target);
-  if (t === null) return { ok: false, error: { code: 'INVALID_TARGET' } };
-
-  const existing = await db.getFirstAsync(
-    `SELECT ntk FROM items WHERE ntk = ? AND order_batch_id = ?`,
-    [code, batchId]
-  );
-  if (existing) return { ok: false, error: { code: 'ITEM_EXISTS', ntk: code } };
-
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
-      `INSERT INTO items (ntk, po, target, order_batch_id) VALUES (?, ?, ?, ?)`,
-      [code, (po || '').trim(), t, batchId]
-    );
-    await recalcBatchTargetInTx(db, batchId);
-  });
-  return { ok: true };
-}
-
-export async function updateItem(batchId, ntk, { po, target }) {
-  const db = await getDb();
-  const code = normalizeNtk(ntk);
-  if (!code) return { ok: false, error: { code: 'INVALID_NTK' } };
-
-  const current = await db.getFirstAsync(
-    `SELECT ntk, po, target FROM items WHERE ntk = ? AND order_batch_id = ?`,
-    [code, batchId]
-  );
-  if (!current) return { ok: false, error: { code: 'ITEM_NOT_FOUND', ntk: code } };
-
-  const newTarget = parseQty(target);
-  if (newTarget === null) return { ok: false, error: { code: 'INVALID_TARGET' } };
-
-  // Không cho hạ mức xuống dưới số đã sản xuất — bảo vệ INV-V1 của FEAT-09.
-  if (newTarget > 0) {
-    const produced = await db.getFirstAsync(
-      `SELECT COALESCE(SUM(qty), 0) as produced FROM entries WHERE ntk = ? AND order_batch_id = ?`,
-      [code, batchId]
-    );
-    const producedQty = produced?.produced || 0;
-    if (newTarget < producedQty) {
-      return { ok: false, error: { code: 'TARGET_BELOW_PRODUCED', ntk: code, target: newTarget, produced: producedQty } };
-    }
-  }
-
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
-      `UPDATE items SET po = ?, target = ? WHERE ntk = ? AND order_batch_id = ?`,
-      [(po || '').trim(), newTarget, code, batchId]
-    );
-    await recalcBatchTargetInTx(db, batchId);
-  });
-  return { ok: true };
-}
-
-export async function removeItem(batchId, ntk) {
-  const db = await getDb();
-  const code = normalizeNtk(ntk);
-  if (!code) return { ok: false, error: { code: 'INVALID_NTK' } };
-
-  const current = await db.getFirstAsync(
-    `SELECT ntk FROM items WHERE ntk = ? AND order_batch_id = ?`,
-    [code, batchId]
-  );
-  if (!current) return { ok: false, error: { code: 'ITEM_NOT_FOUND', ntk: code } };
-
-  const produced = await db.getFirstAsync(
-    `SELECT COALESCE(SUM(qty), 0) as produced FROM entries WHERE ntk = ? AND order_batch_id = ?`,
-    [code, batchId]
-  );
-  const producedQty = produced?.produced || 0;
-  if (producedQty > 0) {
-    return { ok: false, error: { code: 'ITEM_HAS_ENTRIES', ntk: code, produced: producedQty } };
-  }
-
-  // INV-V2: mã hàng còn nằm trong kiện thì không được xoá.
-  // Dùng đường đọc chỉ-để-kiểm-tra để không vô tình vật chất hoá seed vào DB.
-  const containers = await fetchContainersView(batchId);
-  const inPallets = countPalletsWithNtk(containers, code);
-  if (inPallets > 0) {
-    return { ok: false, error: { code: 'ITEM_IN_PALLETS', ntk: code, pallets: inPallets } };
-  }
-
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
-      `DELETE FROM items WHERE ntk = ? AND order_batch_id = ?`,
-      [code, batchId]
-    );
-    await recalcBatchTargetInTx(db, batchId);
-  });
-  return { ok: true };
-}
-
-// ---------- PALLETS ----------
-
-export async function fetchPalletStatus(batchId) {
-  const db = await getDb();
-  const rows = await db.getAllAsync(
-    `SELECT key, done FROM pallet_status WHERE order_batch_id = ?`,
-    [batchId]
-  );
-  const map = {};
-  rows.forEach(r => { map[r.key] = !!r.done; });
-  return map;
-}
-
-export async function setPalletStatus(batchId, key, done) {
-  const db = await getDb();
-  await db.runAsync(
-    `INSERT INTO pallet_status (key, order_batch_id, done) VALUES (?, ?, ?)
-     ON CONFLICT(key, order_batch_id) DO UPDATE SET done = excluded.done`,
-    [key, batchId, done ? 1 : 0]
-  );
-}
-
-export function isPalletDone(cid, pallet, palletDoneMap) {
-  if (isMultiItemPallet(pallet)) {
-    return pallet.items.every(it => !!palletDoneMap[palletKey(cid, pallet.no, it)]);
-  }
-  return !!palletDoneMap[palletKey(cid, pallet.no)];
-}
-
-export function countPalletsDone(palletDoneMap) {
-  return countPalletsDoneWithData(palletDoneMap, containersData);
-}
-
-export function countPalletsDoneWithData(palletDoneMap, containers) {
-  const data = containers || containersData;
-  let done = 0, total = 0;
-  data.forEach(c => {
-    c.pallets.forEach(p => {
-      total++;
-      if (isPalletDone(c.id, p, palletDoneMap)) done++;
-    });
-  });
-  return { done, total };
-}
-
-// ---------- PALLET CRUD (FEAT-10) ----------
-
-function countPalletsWithNtk(containers, ntk) {
-  let count = 0;
-  (containers || []).forEach(c => {
-    (c.pallets || []).forEach(p => {
-      if ((p.items || []).some(it => it.ntk === ntk)) count++;
-    });
-  });
-  return count;
-}
-
-async function writeContainerDataInTx(db, batchId, containers) {
-  await db.runAsync(
-    `INSERT OR REPLACE INTO container_data (batch_id, data, created_at) VALUES (?, ?, ?)`,
-    [batchId, JSON.stringify(containers), new Date().toISOString().slice(0, 10)]
-  );
-  await db.runAsync(
-    `UPDATE order_batches SET pallets_total = ? WHERE id = ?`,
-    [recalcPalletTotals(containers).count, batchId]
-  );
-}
-
-async function replacePalletStatusInTx(db, batchId, doneMap) {
-  await db.runAsync(`DELETE FROM pallet_status WHERE order_batch_id = ?`, [batchId]);
-  for (const [key, done] of Object.entries(doneMap)) {
-    await db.runAsync(
-      `INSERT OR REPLACE INTO pallet_status (key, order_batch_id, done) VALUES (?, ?, ?)`,
-      [key, batchId, done ? 1 : 0]
-    );
-  }
-}
-
-/**
- * Vật chất hoá cấu trúc container từ seed vào DB (giữ nguyên `id` c1/c2/c3)
- * để các dòng `pallet_status` đang tồn tại không bị mất. AC-EDIT-22.
- */
-export async function materializeContainers(batchId) {
-  const db = await getDb();
-  const hasData = await db.getFirstAsync(
-    `SELECT batch_id FROM container_data WHERE batch_id = ?`,
-    [batchId]
-  );
-  if (hasData) return false;
-  await db.runAsync(
-    `INSERT OR REPLACE INTO container_data (batch_id, data, created_at) VALUES (?, ?, ?)`,
-    [batchId, JSON.stringify(containersData), new Date().toISOString().slice(0, 10)]
-  );
-  const { count } = recalcPalletTotals(containersData);
-  await db.runAsync(
-    `UPDATE order_batches SET pallets_total = ? WHERE id = ?`,
-    [count, batchId]
-  );
+/** Ngày hợp lệ theo giờ cục bộ (INV-D2) — DB cũng có CHECK nhưng phải báo lỗi rõ, không ném SQL. */
+function isValidDate(s) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ''))) return false;
   return true;
 }
 
-/** Đọc cấu trúc container CHỈ ĐỂ KIỂM TRA — không ghi gì, fallback seed trong bộ nhớ. */
+// ════════════════════════════════════════════════════════════════════════════
+// ĐỌC — mã hàng
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Danh sách thẻ mã hàng của một đơn.
+ *
+ * **Mỗi dòng = một thẻ = một (PO × mã hàng).** Không tách gì thêm: `v_line_progress` đã có sẵn
+ * `produced`/`defect`/`remaining` tính đúng theo từng PO, nên cột "Đã làm / Còn lại" của thẻ là
+ * **số thật** chứ không phải tổng chung của mã.
+ *
+ * Trả về đúng shape mà `ItemCard`/`SummaryCards` dùng (`ntk` = mã hàng, `po` = PO của thẻ).
+ */
+export async function fetchItemsWithStats(batchId) {
+  const db = await getDb();
+  const id = batchId ?? (await getActiveBatchId(db));
+  if (!id) return [];
+  const rows = await db.getAllAsync(
+    `SELECT * FROM v_line_progress WHERE order_batch_id = ? ORDER BY po, item_code`,
+    [id]
+  );
+  return rows.map(r => ({
+    order_line_id: r.order_line_id,
+    order_batch_id: r.order_batch_id,
+    ntk: r.item_code,
+    po: r.po,
+    target: num(r.target),
+    produced: num(r.produced),
+    defect: num(r.defect),
+    remaining: num(r.remaining),
+    nw_kg: r.nw_kg,
+    gw_kg: r.gw_kg,
+    volume_cbm: r.volume_cbm,
+    package_count: r.package_count,
+  }));
+}
+
+/**
+ * Bảng "Tổng theo PO" — **một câu SQL**, không dựng `Map` trong JS.
+ *
+ * Bản cũ phải cộng `item_po.qty` rồi mới đoán phần sản lượng thuộc PO nào (và không đoán được ⇒
+ * cột "Đã sản xuất" trắng 12/12 dòng). Ở đây mỗi dòng là một PO thật, `produced` cộng đúng các
+ * nhật ký đã gắn PO đó nên **không bao giờ vượt** tổng (INV-D8).
+ */
+export async function fetchPoSummaries(batchId) {
+  const db = await getDb();
+  const id = batchId ?? (await getActiveBatchId(db));
+  if (!id) return [];
+  const rows = await db.getAllAsync(
+    `SELECT * FROM v_po_progress WHERE order_batch_id = ? ORDER BY po`,
+    [id]
+  );
+  return rows.map(r => ({
+    key: r.po,
+    label: r.po,
+    target: num(r.target),
+    produced: num(r.produced),
+    remaining: num(r.remaining),
+    defect: num(r.defect),
+    itemCount: num(r.item_count),
+    // Mọi PO đều quy được sản lượng về đúng PO ⇒ không còn dòng nào "chưa biết" (FEAT-20).
+    hasShared: false,
+  }));
+}
+
+/** Nhật ký sản xuất của MỘT thẻ (một dòng đơn hàng). */
+export async function fetchEntriesForLine(orderLineId) {
+  const db = await getDb();
+  if (!orderLineId) return [];
+  return db.getAllAsync(
+    `SELECT pe.id, pe.date, pe.qty, pe.line, pe.defect_qty, pe.order_line_id,
+            GROUP_CONCAT(pd.type) AS defect_types
+     FROM production_entries pe
+     LEFT JOIN production_defects pd ON pd.entry_id = pe.id
+     WHERE pe.order_line_id = ?
+     GROUP BY pe.id
+     ORDER BY pe.date DESC, pe.id DESC`,
+    [orderLineId]
+  );
+}
+
+/** Số hiệu nhà máy ('DMAC No.') của một mã — dữ liệu bản cũ vứt bỏ. */
+export async function fetchItemRefs(batchId, itemCode) {
+  const db = await getDb();
+  if (!itemCode) return [];
+  const id = batchId ?? (await getActiveBatchId(db));
+  return db.getAllAsync(
+    `SELECT ref_no FROM item_refs WHERE order_batch_id = ? AND item_code = ? ORDER BY ref_no`,
+    [id, itemCode]
+  ).then(rs => rs.map(r => r.ref_no));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// GHI — nhật ký sản xuất
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Hạn mức của một dòng đơn hàng: `SUM(qty)` **≤** `target` (INV-V1).
+ *
+ * Khác bản cũ: hạn mức kiểm theo **mã** (`items.target` là tổng mọi PO). Ở đây kiểm theo
+ * **dòng đơn hàng** ⇒ nhập 300 pcs cho PO 2922 không làm hụt hạn mức của PO 2923, và tổng vẫn
+ * không vượt. Đây là điều mà bản cũ **không làm được** vì không biết phần của mỗi PO.
+ *
+ * @param {number|null} excludeEntryId khi sửa, bỏ dòng đang sửa ra khỏi tổng (AC-ITEM-18)
+ */
+async function checkLineTarget(db, orderLineId, qty, excludeEntryId = null) {
+  const line = await db.getFirstAsync(
+    `SELECT target FROM order_lines WHERE id = ?`, [orderLineId]
+  );
+  if (!line) return { ok: false, code: 'ITEM_NOT_FOUND' };
+  const row = await db.getFirstAsync(
+    `SELECT COALESCE(SUM(qty), 0) AS produced FROM production_entries
+     WHERE order_line_id = ? AND (? IS NULL OR id != ?)`,
+    [orderLineId, excludeEntryId, excludeEntryId]
+  );
+  const target = num(line.target);
+  const produced = num(row?.produced);
+  // target = 0 ⇒ không áp hạn mức (giữ đúng hành vi bản cũ, SPEC-data.md §5.4).
+  if (target > 0) {
+    const limit = await checkQtyLimit(produced, qty, target, line.item_code ?? '');
+    if (!limit.ok) return limit;
+  }
+  return { ok: true, target, produced };
+}
+
+/** Thêm một mục nhật ký sản xuất vào một thẻ (dòng đơn hàng). */
+export async function addEntry(orderLineId, { date, qty, line, defectQty, defectTypes }) {
+  const db = await getDb();
+  const q = parseQty(qty);
+  if (q === null || q <= 0) return fail('INVALID_QTY', { ntk: '' });
+  const d = String(date ?? '').trim();
+  if (!isValidDate(d)) return fail('INVALID_DATE', { date });
+
+  const lineKind = line === 'auto' ? 'auto' : 'manual';
+  const defect = Math.max(parseQty(defectQty) ?? 0, 0);
+
+  const ok = await checkLineTarget(db, orderLineId, q);
+  if (!ok.ok) return fail(ok.code, ok);
+
+  return db.withTransactionAsync(async () => {
+    const res = await db.runAsync(
+      `INSERT INTO production_entries (order_line_id, date, qty, line, defect_qty)
+       VALUES (?, ?, ?, ?, ?)`,
+      [orderLineId, d, q, lineKind, defect]
+    );
+    await writeDefects(db, res.lastInsertRowId, defect, defectTypes);
+    return done({ id: res.lastInsertRowId });
+  });
+}
+
+/** Sửa một mục nhật ký. */
+export async function updateEntry(entryId, { date, qty, line, defectQty, defectTypes }) {
+  const db = await getDb();
+  const cur = await db.getFirstAsync(
+    `SELECT order_line_id FROM production_entries WHERE id = ?`, [entryId]
+  );
+  if (!cur) return fail('ENTRY_NOT_FOUND');
+
+  const q = parseQty(qty);
+  if (q === null || q <= 0) return fail('INVALID_QTY');
+  const d = String(date ?? '').trim();
+  if (!isValidDate(d)) return fail('INVALID_DATE', { date });
+
+  const ok = await checkLineTarget(db, cur.order_line_id, q, entryId);
+  if (!ok.ok) return fail(ok.code, ok);
+
+  const lineKind = line === 'auto' ? 'auto' : 'manual';
+  const defect = Math.max(parseQty(defectQty) ?? 0, 0);
+
+  return db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE production_entries SET date = ?, qty = ?, line = ?, defect_qty = ? WHERE id = ?`,
+      [d, q, lineKind, defect, entryId]
+    );
+    await db.runAsync(`DELETE FROM production_defects WHERE entry_id = ?`, [entryId]);
+    await writeDefects(db, entryId, defect, defectTypes);
+    return done({ id: entryId });
+  });
+}
+
+/** Xoá một mục nhật ký. */
+export async function removeEntry(entryId) {
+  const db = await getDb();
+  const cur = await db.getFirstAsync(
+    `SELECT order_line_id FROM production_entries WHERE id = ?`, [entryId]
+  );
+  if (!cur) return fail('ENTRY_NOT_FOUND');
+  return db.withTransactionAsync(async () => {
+    // `production_defects` có ON DELETE CASCADE nên không cần xoá tay.
+    await db.runAsync(`DELETE FROM production_entries WHERE id = ?`, [entryId]);
+    return done();
+  });
+}
+
+/** Ghi loại hàng lỗi. Loại sai bị CHECK của DB chặn — ở đây lọc trước để không ném lỗi SQL. */
+async function writeDefects(db, entryId, defectQty, defectTypes) {
+  if (!(defectQty > 0)) return;
+  const types = (Array.isArray(defectTypes) ? defectTypes : [])
+    .filter(t => ['yellow', 'red', 'tear'].includes(t));
+  for (const t of new Set(types)) {
+    await db.runAsync(
+      `INSERT OR IGNORE INTO production_defects (entry_id, type) VALUES (?, ?)`, [entryId, t]
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// GHI — mã hàng (thêm/sửa/xoá)
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Thêm một mã hàng vào một PO. Trùng (PO × mã) ⇒ `ITEM_EXISTS`. */
+export async function addItem(batchId, { po, itemCode, target }) {
+  const db = await getDb();
+  const id = batchId ?? (await getActiveBatchId(db));
+  const code = String(itemCode ?? '').trim();
+  if (!code) return fail('INVALID_NTK');
+  const poRow = await db.getFirstAsync(
+    `SELECT id FROM pos WHERE order_batch_id = ? AND code = ?`, [id, String(po ?? '').trim()]
+  );
+  if (!poRow) return fail('ITEM_NOT_IN_ORDER', { po });
+  const dup = await db.getFirstAsync(
+    `SELECT id FROM order_lines WHERE po_id = ? AND item_code = ?`, [poRow.id, code]
+  );
+  if (dup) return fail('ITEM_EXISTS', { ntk: code });
+
+  const t = parseQty(target);
+  if (t === null || t < 0) return fail('INVALID_TARGET');
+  const res = await db.runAsync(
+    `INSERT INTO order_lines (po_id, item_code, target) VALUES (?, ?, ?)`, [poRow.id, code, t]
+  );
+  return done({ order_line_id: res.lastInsertRowId, ntk: code });
+}
+
+/** Sửa hạn mức của một dòng. Không cho xuống dưới lượng đã sản xuất. */
+export async function updateItem(batchId, orderLineId, { target }) {
+  const db = await getDb();
+  const line = await db.getFirstAsync(
+    `SELECT target, item_code FROM order_lines WHERE id = ?`, [orderLineId]
+  );
+  if (!line) return fail('ITEM_NOT_FOUND');
+  const t = parseQty(target);
+  if (t === null || t < 0) return fail('INVALID_TARGET');
+
+  const row = await db.getFirstAsync(
+    `SELECT COALESCE(SUM(qty),0) AS produced FROM production_entries WHERE order_line_id = ?`,
+    [orderLineId]
+  );
+  if (num(line.target) > 0 && t < num(row?.produced)) {
+    return fail('TARGET_BELOW_PRODUCED', { produced: num(row?.produced) });
+  }
+  await db.runAsync(`UPDATE order_lines SET target = ? WHERE id = ?`, [t, orderLineId]);
+  return done({ ntk: line.item_code, target: t });
+}
+
+/**
+ * Xoá một dòng đơn hàng.
+ *
+ * `pallet_lines` khai báo `ON DELETE RESTRICT` nên **DB tự chặn** khi mã còn nằm trong kiện —
+ * không cần (và không nên) check tay ở JS, vì bản cũ có INV-V2 là quy tắc miệng dễ sót.
+ */
+export async function removeItem(batchId, orderLineId) {
+  const db = await getDb();
+  const line = await db.getFirstAsync(
+    `SELECT item_code FROM order_lines WHERE id = ?`, [orderLineId]
+  );
+  if (!line) return fail('ITEM_NOT_FOUND');
+
+  const inPallet = await db.getFirstAsync(
+    `SELECT 1 AS x FROM pallet_lines WHERE order_line_id = ? LIMIT 1`, [orderLineId]
+  );
+  if (inPallet) return fail('ITEM_IN_PALLETS', { ntk: line.item_code });
+  const hasEntries = await db.getFirstAsync(
+    `SELECT 1 AS x FROM production_entries WHERE order_line_id = ? LIMIT 1`, [orderLineId]
+  );
+  if (hasEntries) return fail('ITEM_HAS_ENTRIES', { ntk: line.item_code });
+
+  await db.runAsync(`DELETE FROM order_lines WHERE id = ?`, [orderLineId]);
+  return done({ ntk: line.item_code });
+}
+
+/** Xem trước: xoá theo PO sẽ xoá những dòng nào. */
+export async function previewItemsByPo(batchId, po) {
+  const db = await getDb();
+  const id = batchId ?? (await getActiveBatchId(db));
+  return db.getAllAsync(
+    `SELECT l.id AS order_line_id, l.item_code AS ntk, l.target
+     FROM order_lines l JOIN pos p ON p.id = l.po_id
+     WHERE p.order_batch_id = ? AND p.code = ?
+     ORDER BY l.item_code`,
+    [id, String(po ?? '').trim()]
+  );
+}
+
+/**
+ * Xoá toàn bộ mã hàng của một PO, **all-or-nothing** (INV-V4).
+ *
+ * Khác bản cũ: bản cũ phải loại trừ mã đa PO (`po` có `+`) ra khỏi phép xoá theo một PO. Ở đây
+ * mỗi dòng thuộc **đúng một** PO nên "mã đa PO" không tồn tại — điều kiện (c) của INV-V4 trở nên
+ * tự nhiên thay vì một nhánh code đặc biệt.
+ */
+export async function removeItemsByPo(batchId, po) {
+  const db = await getDb();
+  const id = batchId ?? (await getActiveBatchId(db));
+  const code = String(po ?? '').trim();
+  const rows = await previewItemsByPo(id, code);
+  if (rows.length === 0) return fail('ITEM_NOT_FOUND', { po: code });
+
+  // all-or-nothing: có một dòng đã có nhật ký hoặc còn trong kiện ⇒ không xoá dòng nào.
+  const blockers = await db.getAllAsync(
+    `SELECT l.item_code AS ntk,
+            (SELECT COUNT(*) FROM production_entries e WHERE e.order_line_id = l.id) AS entries,
+            (SELECT COUNT(*) FROM pallet_lines pl WHERE pl.order_line_id = l.id) AS in_pallets
+     FROM order_lines l JOIN pos p ON p.id = l.po_id
+     WHERE p.order_batch_id = ? AND p.code = ?`,
+    [id, code]
+  );
+  const bad = blockers.filter(b => num(b.entries) > 0 || num(b.in_pallets) > 0);
+  if (bad.length > 0) {
+    return fail('ITEM_HAS_ENTRIES', { po: code, blocked: bad.map(b => b.ntk) });
+  }
+
+  return db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `DELETE FROM order_lines WHERE po_id IN (SELECT id FROM pos WHERE order_batch_id = ? AND code = ?)`,
+      [id, code]
+    );
+    return done({ deleted: rows.length });
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ĐỌC/GHI — container & kiện (thay blob JSON)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Cấu trúc container → kiện → dòng hàng, kèm trạng thái tick.
+ *
+ * Bản cũ đọc `container_data.data`, `JSON.parse` rồi dựng lại cả cây ở JS, và **mỗi** thay đổi
+ * kiện phải ghi lại toàn bộ blob. Ở đây là 2 câu `SELECT` trên bảng thật.
+ */
 export async function fetchContainersView(batchId) {
   const db = await getDb();
-  const row = await db.getFirstAsync(
-    `SELECT data FROM container_data WHERE batch_id = ?`,
-    [batchId]
+  const id = batchId ?? (await getActiveBatchId(db));
+  if (!id) return [];
+  const ct = await db.getAllAsync(
+    `SELECT c.id, c.container_no, c.seal_no, p.code AS po
+     FROM containers c JOIN pos p ON p.id = c.po_id
+     WHERE c.order_batch_id = ? ORDER BY c.container_no`,
+    [id]
   );
-  if (!row || !row.data) return containersData;
-  try {
-    const parsed = JSON.parse(row.data);
-    return Array.isArray(parsed) ? parsed : containersData;
-  } catch {
-    return containersData;
+  if (ct.length === 0) return [];
+  const pal = await db.getAllAsync(
+    `SELECT pa.id, pa.container_id, pa.pallet_no, pa.c_no, pa.is_mixed,
+            pa.volume_cbm, pa.nw_kg, pa.gw_kg
+     FROM pallets pa JOIN containers c ON c.id = pa.container_id
+     WHERE c.order_batch_id = ? ORDER BY pa.container_id, pa.pallet_no`,
+    [id]
+  );
+  const lines = await db.getAllAsync(
+    `SELECT pl.id, pl.pallet_id, pl.order_line_id, pl.qty, pl.done, ol.item_code, pos.code AS po
+     FROM pallet_lines pl
+     JOIN order_lines ol ON ol.id = pl.order_line_id
+     JOIN pos ON pos.id = ol.po_id
+     WHERE pos.order_batch_id = ?`,
+    [id]
+  );
+  const byContainer = new Map(ct.map(c => [c.id, { ...c, pallets: [] }]));
+  const palletById = new Map();
+  for (const p of pal) {
+    const obj = { ...p, items: [] };
+    palletById.set(p.id, obj);
+    byContainer.get(p.container_id)?.pallets.push(obj);
   }
+  for (const l of lines) {
+    palletById.get(l.pallet_id)?.items.push({
+      id: l.id, order_line_id: l.order_line_id, ntk: l.item_code,
+      qty: num(l.qty), done: !!l.done, po: l.po,
+    });
+  }
+  return [...byContainer.values()];
 }
 
-/** Đọc cấu trúc container để ghi. Tự vật chất hoá seed nếu batch chưa có. Ném lỗi nếu JSON hỏng. */
-export async function getContainerDataForWrite(batchId) {
+/** Bật/tắt trạng thái đóng kiện của một dòng hàng. */
+export async function setPalletLineDone(palletLineId, done_) {
   const db = await getDb();
-  let row = await db.getFirstAsync(
-    `SELECT data FROM container_data WHERE batch_id = ?`,
-    [batchId]
-  );
-  if (!row) {
-    await materializeContainers(batchId);
-    row = await db.getFirstAsync(
-      `SELECT data FROM container_data WHERE batch_id = ?`,
-      [batchId]
-    );
-  }
-  if (!row || !row.data) throw new Error('Không đọc được cấu trúc container.');
-  try {
-    const parsed = JSON.parse(row.data);
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    throw new Error('Dữ liệu container bị lỗi, không thể chỉnh sửa.');
-  }
+  const cur = await db.getFirstAsync(`SELECT id FROM pallet_lines WHERE id = ?`, [palletLineId]);
+  if (!cur) return fail('PALLET_NOT_FOUND');
+  await db.runAsync(`UPDATE pallet_lines SET done = ? WHERE id = ?`, [done_ ? 1 : 0, palletLineId]);
+  return done();
 }
 
-async function validatePalletItems(db, batchId, items) {
-  if (!Array.isArray(items) || items.length === 0) {
-    return { ok: false, error: { code: 'PALLET_EMPTY' } };
-  }
-  const seen = new Set();
-  for (const it of items) {
-    const ntk = normalizeNtk(it?.ntk);
-    if (!ntk) return { ok: false, error: { code: 'INVALID_NTK' } };
-    if (seen.has(ntk)) return { ok: false, error: { code: 'DUPLICATE_NTK', ntk } };
-    seen.add(ntk);
-    const qty = parseQty(it?.qty);
-    if (qty === null || qty <= 0) return { ok: false, error: { code: 'INVALID_PALLET_QTY', ntk } };
-
-    const row = await db.getFirstAsync(
-      `SELECT ntk FROM items WHERE ntk = ? AND order_batch_id = ?`,
-      [ntk, batchId]
-    );
-    if (!row) return { ok: false, error: { code: 'ITEM_NOT_IN_ORDER', ntk } };
-  }
-  return { ok: true };
-}
-
-function normalizePalletItems(items) {
-  return items.map(it => ({ ntk: normalizeNtk(it.ntk), qty: parseQty(it.qty) }));
-}
-
+/** Thêm một kiện vào container. */
 export async function addPallet(batchId, containerId, { no, items }) {
   const db = await getDb();
   const palletNo = parseQty(no);
-  if (palletNo === null || palletNo <= 0) return { ok: false, error: { code: 'INVALID_PALLET_NO' } };
+  if (palletNo === null || palletNo <= 0) return fail('INVALID_PALLET_NO');
 
-  const check = await validatePalletItems(db, batchId, items);
-  if (!check.ok) return check;
+  const ct = await db.getFirstAsync(`SELECT id FROM containers WHERE id = ?`, [containerId]);
+  if (!ct) return fail('CONTAINER_NOT_FOUND');
+  const dup = await db.getFirstAsync(
+    `SELECT 1 AS x FROM pallets WHERE container_id = ? AND pallet_no = ?`, [containerId, palletNo]
+  );
+  if (dup) return fail('PALLET_EXISTS', { no: palletNo });
 
-  const containers = await getContainerDataForWrite(batchId);
-  const container = (containers || []).find(c => c.id === containerId);
-  if (!container) return { ok: false, error: { code: 'CONTAINER_NOT_FOUND' } };
-  if ((container.pallets || []).some(p => p.no === palletNo)) {
-    return { ok: false, error: { code: 'PALLET_EXISTS', no: palletNo } };
-  }
+  const norm = normalizePalletItems(items);
+  if (norm.length === 0) return fail('PALLET_EMPTY');
 
-  const nextContainers = containers.map(c => (
-    c.id === containerId
-      ? { ...c, pallets: [...(c.pallets || []), { no: palletNo, items: normalizePalletItems(items) }] }
-      : c
-  ));
-
-  const doneMap = await fetchPalletStatus(batchId);
-  const nextDone = remapPalletStatus(containers, nextContainers, doneMap);
-
-  await db.withTransactionAsync(async () => {
-    await writeContainerDataInTx(db, batchId, nextContainers);
-    await replacePalletStatusInTx(db, batchId, nextDone);
+  return db.withTransactionAsync(async () => {
+    const res = await db.runAsync(
+      `INSERT INTO pallets (container_id, po_id, pallet_no, is_mixed) VALUES (?, ?, ?, ?)`,
+      [containerId, ct.po_id, palletNo, norm.length > 1 ? 1 : 0]
+    );
+    for (const it of norm) {
+      await db.runAsync(
+        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty) VALUES (?, ?, ?)`,
+        [res.lastInsertRowId, it.order_line_id, it.qty]
+      );
+    }
+    return done({ no: palletNo });
   });
-  return { ok: true, no: palletNo };
 }
 
-export async function updatePallet(batchId, containerId, palletNo, { no, items }) {
+/** Sửa kiện: `pallet_no` bất biến (giữ đúng hành vi bản cũ) — chỉ kéo dòng hàng. */
+export async function updatePallet(batchId, containerId, palletNo, { items }) {
   const db = await getDb();
-  const currentNo = parseQty(palletNo);
-  if (currentNo === null || currentNo <= 0) return { ok: false, error: { code: 'INVALID_PALLET_NO' } };
+  const pal = await db.getFirstAsync(
+    `SELECT id FROM pallets WHERE container_id = ? AND pallet_no = ?`, [containerId, palletNo]
+  );
+  if (!pal) return fail('PALLET_NOT_FOUND');
+  const norm = normalizePalletItems(items);
+  if (norm.length === 0) return fail('PALLET_EMPTY');
 
-  // Q4: v1 cấm đổi số hiệu kiện (sẽ phải di chuyển khoá pallet_status).
-  const newNo = no === undefined || no === null ? currentNo : parseQty(no);
-  if (newNo === null || newNo <= 0) return { ok: false, error: { code: 'INVALID_PALLET_NO' } };
-  if (newNo !== currentNo) return { ok: false, error: { code: 'PALLET_NO_IMMUTABLE' } };
-
-  const check = await validatePalletItems(db, batchId, items);
-  if (!check.ok) return check;
-
-  const containers = await getContainerDataForWrite(batchId);
-  const container = (containers || []).find(c => c.id === containerId);
-  if (!container) return { ok: false, error: { code: 'CONTAINER_NOT_FOUND' } };
-  if (!(container.pallets || []).some(p => p.no === currentNo)) {
-    return { ok: false, error: { code: 'PALLET_NOT_FOUND', no: currentNo } };
-  }
-
-  const nextContainers = containers.map(c => (
-    c.id === containerId
-      ? {
-        ...c,
-        pallets: (c.pallets || []).map(p => (
-          p.no === currentNo ? { ...p, items: normalizePalletItems(items) } : p
-        )),
-      }
-      : c
-  ));
-
-  const doneMap = await fetchPalletStatus(batchId);
-  // INV-P1: di chuyển trạng thái tick sang khoá mới theo ntk.
-  const nextDone = remapPalletStatus(containers, nextContainers, doneMap);
-
-  await db.withTransactionAsync(async () => {
-    await writeContainerDataInTx(db, batchId, nextContainers);
-    await replacePalletStatusInTx(db, batchId, nextDone);
+  return db.withTransactionAsync(async () => {
+    await db.runAsync(`DELETE FROM pallet_lines WHERE pallet_id = ?`, [pal.id]);
+    for (const it of norm) {
+      await db.runAsync(
+        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty) VALUES (?, ?, ?)`,
+        [pal.id, it.order_line_id, it.qty]
+      );
+    }
+    await db.runAsync(
+      `UPDATE pallets SET is_mixed = ? WHERE id = ?`, [norm.length > 1 ? 1 : 0, pal.id]
+    );
+    return done({ no: palletNo });
   });
-  return { ok: true, no: currentNo };
 }
 
+/** Xoá kiện (kèm dòng hàng — `ON DELETE CASCADE`). */
 export async function removePallet(batchId, containerId, palletNo) {
   const db = await getDb();
-  const currentNo = parseQty(palletNo);
-  if (currentNo === null || currentNo <= 0) return { ok: false, error: { code: 'INVALID_PALLET_NO' } };
-
-  const containers = await getContainerDataForWrite(batchId);
-  const container = (containers || []).find(c => c.id === containerId);
-  if (!container) return { ok: false, error: { code: 'CONTAINER_NOT_FOUND' } };
-  const pallet = (container.pallets || []).find(p => p.no === currentNo);
-  if (!pallet) return { ok: false, error: { code: 'PALLET_NOT_FOUND', no: currentNo } };
-
-  // AC-EDIT-20: giữ nguyên số hiệu các kiện còn lại, chỉ gỡ đúng kiện này.
-  const nextContainers = containers.map(c => (
-    c.id === containerId
-      ? { ...c, pallets: (c.pallets || []).filter(p => p.no !== currentNo) }
-      : c
-  ));
-
-  const doneMap = await fetchPalletStatus(batchId);
-  const nextDone = remapPalletStatus(containers, nextContainers, doneMap);
-
-  await db.withTransactionAsync(async () => {
-    await writeContainerDataInTx(db, batchId, nextContainers);
-    await replacePalletStatusInTx(db, batchId, nextDone);
-  });
-  return { ok: true, no: currentNo };
+  const pal = await db.getFirstAsync(
+    `SELECT id FROM pallets WHERE container_id = ? AND pallet_no = ?`, [containerId, palletNo]
+  );
+  if (!pal) return fail('PALLET_NOT_FOUND');
+  await db.runAsync(`DELETE FROM pallets WHERE id = ?`, [pal.id]);
+  return done({ no: palletNo });
 }
 
-// ---------- HISTORY ----------
+function normalizePalletItems(items) {
+  const list = Array.isArray(items) ? items : [];
+  const out = [];
+  for (const it of list) {
+    const q = parseQty(it?.qty);
+    if (q === null || q <= 0) return [];
+    const lineId = parseQty(it?.order_line_id);
+    if (lineId === null || lineId <= 0) return [];
+    out.push({ order_line_id: lineId, qty: q });
+  }
+  return out;
+}
 
+// ════════════════════════════════════════════════════════════════════════════
+// LỊCH SỬ & LƯU TRỮ
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Các năm có dữ liệu, mới nhất trước. */
+export async function fetchAvailableYears() {
+  const db = await getDb();
+  const rows = await db.getAllAsync(
+    `SELECT DISTINCT substr(e.date, 1, 4) AS year
+     FROM production_entries e ORDER BY year DESC`
+  );
+  return rows.map(r => r.year).filter(Boolean);
+}
+
+/** Biểu thức nhóm ngày — `year` | `month` | `day`, dùng chung cho cả 2 hàm lịch sử. */
+const HISTORY_GROUP_EXPR = {
+  year: (a) => `substr(${a}.date,1,4)`,
+  month: (a) => `substr(${a}.date,1,7)`,
+  day: (a) => `${a}.date`,
+};
+
+/**
+ * Nhật ký gom theo `year` | `month` | `day`, kèm tách `manual`/`auto` và tổng lỗi.
+ *
+ * Giữ **tên field cũ** (`groupKey`/`total`/`manualTotal`/`autoTotal`/`defectTotal`) vì
+ * `HistoryScreen` đọc thẳng. Bản cũ cần `JOIN entries` 3 lần để cộng tay; ở đây một câu
+ * `GROUP BY` có `SUM(CASE WHEN …)` — cùng kết quả, ít chỗ hơn.
+ */
 export async function fetchHistoryGrouped(groupBy, filterValue) {
   const db = await getDb();
-  let keyExpr;
-  if (groupBy === 'month') keyExpr = `substr(date, 1, 7)`;
-  else if (groupBy === 'year') keyExpr = `substr(date, 1, 4)`;
-  else keyExpr = `date`;
-
-  let sql = `
-    SELECT ${keyExpr} as groupKey,
-           SUM(qty) as total,
-           SUM(CASE WHEN line = 'manual' THEN qty ELSE 0 END) as manualTotal,
-           SUM(CASE WHEN line = 'auto' THEN qty ELSE 0 END) as autoTotal,
-           SUM(defect_qty) as defectTotal
-    FROM entries
-  `;
-  const params = [];
-  if (filterValue) {
-    sql += ` WHERE ${keyExpr} = ?`;
-    params.push(filterValue);
-  }
-  sql += ` GROUP BY groupKey ORDER BY groupKey DESC`;
-  return db.getAllAsync(sql, params);
+  const expr = HISTORY_GROUP_EXPR[groupBy]?.('e');
+  if (!expr) return [];
+  const where = filterValue ? `WHERE ${expr} = ?` : '';
+  const rows = await db.getAllAsync(
+    `SELECT ${expr} AS group_key,
+            COALESCE(SUM(e.qty),0) AS total,
+            COALESCE(SUM(CASE WHEN e.line = 'manual' THEN e.qty ELSE 0 END),0) AS manual_total,
+            COALESCE(SUM(CASE WHEN e.line = 'auto'   THEN e.qty ELSE 0 END),0) AS auto_total,
+            COALESCE(SUM(e.defect_qty),0) AS defect_total
+     FROM production_entries e
+     ${where}
+     GROUP BY ${expr} ORDER BY group_key DESC`,
+    filterValue ? [filterValue] : []
+  );
+  return rows.map(r => ({
+    groupKey: r.group_key,
+    total: num(r.total),
+    manualTotal: num(r.manual_total),
+    autoTotal: num(r.auto_total),
+    defectTotal: num(r.defect_total),
+  }));
 }
 
+/** Chi tiết một nhóm lịch sử — `ntk` đã kèm PO vì một mã có thể thuộc nhiều PO. */
 export async function fetchHistoryDetail(groupBy, groupKey) {
   const db = await getDb();
-  if (groupBy === 'day') {
-    return db.getAllAsync(
-      `SELECT id, ntk, date, qty, line, defect_qty, defect_types, order_batch_id
-       FROM entries WHERE date = ? ORDER BY id DESC`,
-      [groupKey]
-    );
-  }
-  const keyExpr = groupBy === 'month' ? `substr(date,1,7)` : `substr(date,1,4)`;
+  const expr = HISTORY_GROUP_EXPR[groupBy]?.('pe');
+  if (!expr) return [];
   return db.getAllAsync(
-    `SELECT ntk, SUM(qty) as qty, SUM(defect_qty) as defect_qty
-     FROM entries WHERE ${keyExpr} = ? GROUP BY ntk ORDER BY ntk`,
+    `SELECT pe.id, pe.date, pe.qty, pe.line, pe.defect_qty,
+            ol.item_code AS ntk, p.code AS po
+     FROM production_entries pe
+     JOIN order_lines ol ON ol.id = pe.order_line_id
+     JOIN pos p ON p.id = ol.po_id
+     WHERE ${expr} = ?
+     ORDER BY pe.date DESC, pe.id DESC`,
     [groupKey]
   );
 }
 
-export async function fetchAvailableYears() {
-  const db = await getDb();
-  const rows = await db.getAllAsync(
-    `SELECT DISTINCT substr(date,1,4) as y FROM entries ORDER BY y DESC`
-  );
-  return rows.map(r => r.y);
-}
-
-// ---------- ARCHIVES ----------
-
+/**
+ * Danh sách đơn đã lưu trữ.
+ *
+ * Giữ **tên field cũ** (snake_case) vì `ArchiveCard` đọc thẳng các tên này — đổi tên ở đây sẽ
+ * làm vỡ thẻ lịch sử mà không có lý do. Bản cũ lấy các số này từ cột đếm phi chuẩn hoá trên
+ * `order_batches` (có thể trôi); ở đây tính thẳng từ bảng dữ liệu nên **không thể** lệch.
+ */
 export async function fetchArchives() {
   const db = await getDb();
-  return db.getAllAsync(
-    `SELECT * FROM order_batches WHERE status = 'archived' ORDER BY id DESC`
+  const rows = await db.getAllAsync(
+    `SELECT b.id, b.finished_date, b.source_file, b.mark,
+            (SELECT COUNT(*) FROM pos WHERE order_batch_id = b.id) AS po_count,
+            (SELECT COUNT(DISTINCT l.item_code) FROM order_lines l
+               JOIN pos p ON p.id = l.po_id WHERE p.order_batch_id = b.id) AS item_count,
+            (SELECT COALESCE(SUM(l.target),0) FROM order_lines l
+               JOIN pos p ON p.id = l.po_id WHERE p.order_batch_id = b.id) AS total_target,
+            (SELECT COALESCE(SUM(e.qty),0) FROM production_entries e
+               JOIN order_lines l ON l.id = e.order_line_id
+               JOIN pos p ON p.id = l.po_id WHERE p.order_batch_id = b.id) AS total_produced,
+            (SELECT COALESCE(SUM(e.defect_qty),0) FROM production_entries e
+               JOIN order_lines l ON l.id = e.order_line_id
+               JOIN pos p ON p.id = l.po_id WHERE p.order_batch_id = b.id) AS total_defect,
+            (SELECT COUNT(*) FROM pallets pa JOIN containers c ON c.id = pa.container_id
+               WHERE c.order_batch_id = b.id) AS pallets_total,
+            (SELECT COUNT(DISTINCT pl.pallet_id) FROM pallet_lines pl
+               JOIN pallets pa ON pa.id = pl.pallet_id
+               JOIN containers c ON c.id = pa.container_id
+               WHERE c.order_batch_id = b.id AND pl.done = 1) AS pallets_done
+     FROM order_batches b WHERE b.status = 'archived' ORDER BY b.id DESC`
   );
-}
-
-export async function fetchArchiveItems(batchId) {
-  const db = await getDb();
-  const items = await db.getAllAsync(
-    `SELECT ntk, target FROM items WHERE order_batch_id = ?`, [batchId]
-  );
-  const stats = await db.getAllAsync(
-    `SELECT ntk, SUM(qty) as produced, SUM(defect_qty) as defect
-     FROM entries WHERE order_batch_id = ? GROUP BY ntk`, [batchId]
-  );
-  const statMap = {};
-  stats.forEach(s => { statMap[s.ntk] = s; });
-  return items.map(it => ({
-    ...it,
-    produced: statMap[it.ntk]?.produced || 0,
-    defect: statMap[it.ntk]?.defect || 0,
+  return rows.map(r => ({
+    id: r.id,
+    finished_date: r.finished_date,
+    source_file: r.source_file,
+    mark: r.mark,
+    po_count: num(r.po_count),
+    item_count: num(r.item_count),
+    total_target: num(r.total_target),
+    total_produced: num(r.total_produced),
+    total_defect: num(r.total_defect),
+    pallets_total: num(r.pallets_total),
+    pallets_done: num(r.pallets_done),
   }));
 }
 
-// "Hoàn tất đơn hàng": chỉ đổi trạng thái batch, KHÔNG copy dữ liệu.
-export async function finishOrder(containers) {
+/** Mã hàng của một đơn lưu trữ (không sửa được — INV-B2). */
+export async function fetchArchiveItems(batchId) {
   const db = await getDb();
-  const batchId = await getActiveBatchId(db);
-
-  const totals = await db.getFirstAsync(
-    `SELECT SUM(qty) as produced, SUM(defect_qty) as defect
-     FROM entries WHERE order_batch_id = ?`, [batchId]
-  );
-  const targetRow = await db.getFirstAsync(
-    `SELECT SUM(target) as target FROM items WHERE order_batch_id = ?`, [batchId]
-  );
-  const palletMap = await fetchPalletStatus(batchId);
-  const { done: donePallets, total: totalPallets } = countPalletsDoneWithData(palletMap, containers);
-
-  await db.runAsync(
-    `UPDATE order_batches
-     SET status='archived', finished_date=?, total_target=?, total_produced=?, total_defect=?,
-         pallets_done=?, pallets_total=?
-     WHERE id=?`,
-    [
-      new Date().toISOString().slice(0, 10),
-      targetRow?.target || 0,
-      totals?.produced || 0,
-      totals?.defect || 0,
-      donePallets, totalPallets, batchId,
-    ]
-  );
-
-  const seedTotal = containersData.reduce((s, c) => s + c.pallets.length, 0);
-  const newBatch = await db.runAsync(
-    `INSERT INTO order_batches (status, pallets_total) VALUES ('active', ?)`,
-    [seedTotal]
-  );
-  const newBatchId = newBatch.lastInsertRowId;
-  let newTarget = 0;
-  for (const it of seedItems) {
-    await db.runAsync(
-      `INSERT INTO items (ntk, po, target, order_batch_id) VALUES (?, ?, ?, ?)`,
-      [it.ntk, it.po, it.target, newBatchId]
-    );
-    newTarget += it.target;
-  }
-  await db.runAsync(`UPDATE order_batches SET total_target=? WHERE id=?`, [newTarget, newBatchId]);
-
-  return newBatchId;
+  return db.getAllAsync(
+    `SELECT * FROM v_line_progress WHERE order_batch_id = ? ORDER BY po, item_code`, [batchId]
+  ).then(rs => rs.map(r => ({
+    order_line_id: r.order_line_id, ntk: r.item_code, po: r.po,
+    target: num(r.target), produced: num(r.produced), defect: num(r.defect),
+    remaining: num(r.remaining),
+  })));
 }
 
-// ---------- IMPORT ----------
+/** Xem trước hậu quả xoá đơn lưu trữ (INV-B4: phải cảnh báo số liệu Lịch sử giảm). */
+export async function previewArchiveDelete(batchId) {
+  const db = await getDb();
+  const b = await db.getFirstAsync(`SELECT * FROM order_batches WHERE id = ?`, [batchId]);
+  if (!b) return { ok: false, error: { code: 'ARCHIVE_NOT_FOUND' } };
+  if (b.status === 'active') return fail('BATCH_ACTIVE');
+  const entries = await db.getFirstAsync(
+    `SELECT COUNT(*) AS c FROM production_entries e
+     JOIN order_lines l ON l.id = e.order_line_id
+     JOIN pos p ON p.id = l.po_id WHERE p.order_batch_id = ?`, [batchId]
+  );
+  const pos = await db.getFirstAsync(
+    `SELECT COUNT(*) AS c FROM pos WHERE order_batch_id = ?`, [batchId]
+  );
+  const pallets = await db.getFirstAsync(
+    `SELECT COUNT(*) AS c FROM pallets pa
+     JOIN containers c ON c.id = pa.container_id WHERE c.order_batch_id = ?`, [batchId]
+  );
+  return done({
+    id: batchId,
+    entryCount: num(entries?.c),
+    poCount: num(pos?.c),
+    palletCount: num(pallets?.c),
+    finishedDate: b.finished_date,
+  });
+}
 
+/**
+ * Xoá hẳn đơn lưu trữ (INV-B2).
+ *
+ * Mọi bảng con đều `ON DELETE CASCADE` từ `order_batches` ⇒ xoá **một** câu, không cần liệt kê
+ * `entries`/`items`/`pallet_status`/`container_data` như bản cũ (bản cũ buộc phải xoá tay từng
+ * bảng và dễ sót). Chỉ nhắm `status='archived'`.
+ */
+export async function deleteArchive(batchId) {
+  const db = await getDb();
+  const b = await db.getFirstAsync(`SELECT status FROM order_batches WHERE id = ?`, [batchId]);
+  if (!b) return fail('ARCHIVE_NOT_FOUND');
+  if (b.status === 'active') return fail('BATCH_ACTIVE');
+  await db.runAsync(`DELETE FROM order_batches WHERE id = ? AND status = 'archived'`, [batchId]);
+  return done({ id: batchId });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ĐƠN HÀNG
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Hoàn tất đơn: archive đơn cũ + tạo đơn mới **trắng** (FEAT-14), trong MỘT transaction
+ * (INV-B3). `AND status='active'` chống gọi song song (INV-B1).
+ */
+export async function finishOrder() {
+  const db = await getDb();
+  const active = await db.getFirstAsync(
+    `SELECT id FROM order_batches WHERE status = 'active' ORDER BY id DESC LIMIT 1`
+  );
+  if (!active) return fail('NO_ACTIVE_BATCH');
+  return db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE order_batches SET status='archived', finished_date=? WHERE id = ? AND status='active'`,
+      [todayLocal(), active.id]
+    );
+    const res = await db.runAsync(
+      `INSERT INTO order_batches (status, imported_at) VALUES ('active', ?)`, [todayLocal()]
+    );
+    return done({ id: res.lastInsertRowId });
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// NHẬP JSON
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Nhập `packing_data.json` (`schema_version: 1`) — nguồn dữ liệu chính.
+ *
+ * `buildImportPlanV2` là hàm thuần (không đụng SQLite) nên kế hoạch được kiểm bằng `node` thuần và
+ * bằng chính `src/data/Dmac.json`. Ở đây chỉ ghi đúng thứ tự mà kế hoạch đã sắp.
+ *
+ * **all-or-nothing** (INV-I4): mọi việc nằm trong MỘT transaction ⇒ lỗi giữa chừng thì DB không
+ * đổi, không để lại dữ liệu nửa vời.
+ */
+export async function importPackingV1(batchId, jsonData) {
+  const db = await getDb();
+  const batchIdToUse = batchId ?? (await getActiveBatchId(db));
+  if (!batchIdToUse) return fail('NO_ACTIVE_BATCH');
+
+  const plan = buildImportPlanV2(jsonData);
+  if (plan.pos.length === 0) return fail('NO_SHIPMENTS');
+  if (plan.lines.length === 0) return fail('ITEMS_EMPTY');
+
+  return db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE order_batches SET source_file = ?, mark = ? WHERE id = ?`,
+      [plan.order.sourceFile, plan.order.mark, batchIdToUse]
+    );
+    // Xoá dữ liệu nhập cũ của đơn này để nạp lại không nhân đôi.
+    // `ON DELETE RESTRICT` ⇒ phải xoá kiện trước rồi tới dòng đơn hàng.
+    await db.runAsync(
+      `DELETE FROM pallets WHERE container_id IN (SELECT id FROM containers WHERE order_batch_id = ?)`,
+      [batchIdToUse]
+    );
+    await db.runAsync(`DELETE FROM containers WHERE order_batch_id = ?`, [batchIdToUse]);
+    await db.runAsync(
+      `DELETE FROM order_lines WHERE po_id IN (SELECT id FROM pos WHERE order_batch_id = ?)`,
+      [batchIdToUse]
+    );
+    await db.runAsync(`DELETE FROM item_refs WHERE order_batch_id = ?`, [batchIdToUse]);
+    await db.runAsync(`DELETE FROM pos WHERE order_batch_id = ?`, [batchIdToUse]);
+
+    const posIds = [];
+    for (const po of plan.pos) {
+      const r = await db.runAsync(
+        `INSERT INTO pos (order_batch_id, code, consignee, address, destination, invoice_no)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [batchIdToUse, po.code, po.consignee, po.address, po.destination, po.invoice_no]
+      );
+      posIds.push(r.lastInsertRowId);
+    }
+
+    const lineIds = [];
+    for (const l of plan.lines) {
+      const r = await db.runAsync(
+        `INSERT INTO order_lines (po_id, item_code, target, nw_kg, gw_kg, volume_cbm, package_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [posIds[l.poIdx], l.itemCode, l.target, l.nw_kg, l.gw_kg, l.volume_cbm, l.package_count]
+      );
+      lineIds.push(r.lastInsertRowId);
+    }
+
+    for (const r of plan.refs) {
+      await db.runAsync(
+        `INSERT OR IGNORE INTO item_refs (order_batch_id, item_code, ref_no) VALUES (?, ?, ?)`,
+        [batchIdToUse, r.itemCode, r.refNo]
+      );
+    }
+
+    const containerIds = [];
+    for (const c of plan.containers) {
+      const r = await db.runAsync(
+        `INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`,
+        [batchIdToUse, posIds[c.poIdx], c.containerNo, c.sealNo]
+      );
+      containerIds.push(r.lastInsertRowId);
+    }
+
+    const palletIds = [];
+    for (const p of plan.pallets) {
+      const r = await db.runAsync(
+        `INSERT INTO pallets (container_id, po_id, pallet_no, c_no, is_mixed,
+                              length_m, width_m, height_m, volume_cbm, nw_kg, gw_kg)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [containerIds[p.containerIdx], posIds[p.poIdx], p.palletNo, p.cNo, p.isMixed,
+         p.length_m, p.width_m, p.height_m, p.volume_cbm, p.nw_kg, p.gw_kg]
+      );
+      palletIds.push(r.lastInsertRowId);
+    }
+
+    for (const pl of plan.palletLines) {
+      await db.runAsync(
+        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty) VALUES (?, ?, ?)`,
+        [palletIds[pl.palletIdx], lineIds[pl.lineIdx], pl.qty]
+      );
+    }
+
+    return done({
+      pos: plan.pos.length, lines: plan.lines.length,
+      containers: plan.containers.length, pallets: plan.pallets.length,
+    });
+  });
+}
+
+/**
+ * Nhập nhật ký sản xuất từ JSON (`entries`).
+ *
+ * Mỗi mục phải có `po` để xác định dòng đơn hàng — bản cũ cho phép thiếu PO và tạo ra trạng
+ * thái "chưa gắn PO" không giải quyết được; ở đây thiếu PO là **lỗi dữ liệu**, báo rõ thay vì
+ * nhập vào đâu không rõ.
+ */
 export async function importEntriesFromJson(batchId, entries) {
   const db = await getDb();
-  let imported = 0;
-  let skipped = 0;
-  let skippedOver = 0;
+  const bid = batchId ?? (await getActiveBatchId(db));
+  if (!Array.isArray(entries) || entries.length === 0) return fail('ENTRIES_EMPTY');
 
-  await db.withTransactionAsync(async () => {
-    // FEAT-09: hạn mức + số lượng đã có, nạp 1 lần để kiểm tra tích luỹ trong transaction.
-    // Dùng Map: ntk từ file JSON không kiểm soát được, tránh trùng key của Object.prototype.
-    const usageMap = new Map();
-    const targetRows = await db.getAllAsync(
-      `SELECT ntk, target FROM items WHERE order_batch_id = ?`, [batchId]
-    );
-    targetRows.forEach(r => usageMap.set(r.ntk, { target: r.target, produced: 0, hasLimit: r.target > 0 }));
-    const producedRows = await db.getAllAsync(
-      `SELECT ntk, COALESCE(SUM(qty), 0) as produced
-       FROM entries WHERE order_batch_id = ? GROUP BY ntk`, [batchId]
-    );
-    producedRows.forEach(r => {
-      const u = usageMap.get(r.ntk);
-      if (u) u.produced = r.produced;
-    });
+  // (po, item_code) → order_line_id
+  const map = new Map(
+    (await db.getAllAsync(
+      `SELECT l.id, p.code AS po, l.item_code
+       FROM order_lines l JOIN pos p ON p.id = l.po_id WHERE p.order_batch_id = ?`, [bid]
+    )).map(r => [`${r.po}\u0000${r.item_code}`, r.id])
+  );
 
-    for (const entry of entries) {
-      const { ntk, date, qty, line, defectQty, defectTypes } = entry;
-      const q = parseFloat(qty) || 0;
-      const dq = parseFloat(defectQty) || 0;
-
-      if (q <= 0 && dq <= 0) {
-        skipped++;
-        continue;
-      }
-
-      const usage = usageMap.get(ntk);
-      if (!usage) {
-        skipped++;
-        continue;
-      }
-
-      const check = checkQtyLimit({ ...usage, incomingQty: q });
-      if (!check.ok) {
-        skippedOver++;
-        continue;
-      }
-      usage.produced = usage.produced + q;
-
-      await db.runAsync(
-        `INSERT INTO entries (ntk, order_batch_id, date, qty, line, defect_qty, defect_types)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [ntk, batchId, date, q, line || 'manual', dq, (defectTypes || []).join(',')]
-      );
-      imported++;
+  const problems = [];
+  let idx = 0;
+  for (const e of entries) {
+    idx += 1;
+    const po = String(e?.po ?? '').trim();
+    const code = String(e?.ntk ?? '').trim();
+    const key = `${po}\u0000${code}`;
+    if (!po) { problems.push(`Dòng ${idx}: thiếu PO`); continue; }
+    if (!map.has(key)) { problems.push(`Dòng ${idx}: không có mã ${code} trong PO ${po}`); continue; }
+    const q = parseQty(e?.qty);
+    if (q === null || q <= 0) { problems.push(`Dòng ${idx}: số lượng không hợp lệ`); continue; }
+    const d = String(e?.date ?? '').trim();
+    if (!isValidDate(d)) { problems.push(`Dòng ${idx}: ngày "${d}" sai định dạng YYYY-MM-DD`); continue; }
+    // Số lượng vượt hạn mức ⇒ cảnh báo nhưng **vẫn nhập** (không tự sửa dữ liệu nguồn).
+    const lineId = map.get(key);
+    const line = await db.getFirstAsync(`SELECT target FROM order_lines WHERE id = ?`, [lineId]);
+    const used = num((await db.getFirstAsync(
+      `SELECT COALESCE(SUM(qty),0) c FROM production_entries WHERE order_line_id = ?`, [lineId]
+    ))?.c);
+    if (num(line?.target) > 0 && used + q > num(line.target)) {
+      problems.push(`Dòng ${idx}: ${code} (PO ${po}) vượt hạn mức (đã có ${used}, thêm ${q}, hạn mức ${line.target})`);
     }
-  });
+    const defect = Math.max(parseQty(e?.defect_qty ?? e?.defectQty) ?? 0, 0);
+    const res = await db.runAsync(
+      `INSERT INTO production_entries (order_line_id, date, qty, line, defect_qty)
+       VALUES (?, ?, ?, ?, ?)`,
+      [lineId, d, q, e?.line === 'auto' ? 'auto' : 'manual', defect]
+    );
+    const types = String(e?.defect_types ?? e?.defectTypes ?? '').split(',').map(x => x.trim()).filter(Boolean);
+    await writeDefects(db, res.lastInsertRowId, defect, types);
+  }
 
-  return { imported, skipped, skippedOver };
+  return done({
+    imported: entries.length - problems.length,
+    total: entries.length,
+    problems,
+  });
 }
 
-// ---------- IMPORT PACKING LIST ----------
-
+/**
+ * Nhập danh sách mã hàng dạng phẳng (định dạng `總表` / `Column1..Column10` của bản cũ).
+ * Mỗi dòng phải có PO; mã + PO là khoá duy nhất nên nạp lại không nhân đôi.
+ */
 export async function importItemsFromJson(batchId, jsonData) {
   const db = await getDb();
-  const data = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
+  const bid = batchId ?? (await getActiveBatchId(db));
+  if (!bid) return fail('NO_ACTIVE_BATCH');
+  const rows = Array.isArray(jsonData) ? jsonData : (jsonData?.items ?? []);
+  if (rows.length === 0) return fail('ITEMS_EMPTY');
 
-  let summaryKey = '\u7e3d\u8868';
-  let summaryData = data[summaryKey];
-  if (!Array.isArray(summaryData)) {
-    for (const key of Object.keys(data)) {
-      if (Array.isArray(data[key])) {
-        summaryData = data[key];
-        summaryKey = key;
-        break;
-      }
-    }
-  }
-  if (!Array.isArray(summaryData)) {
-    throw new Error('Không tìm thấy dữ liệu sản phẩm trong file JSON.');
-  }
-
-  const itemsMap = {};
-  let po = null;
-
-  for (const row of summaryData) {
-    if (!row || typeof row !== 'object') continue;
-    const ntk = row.Column4;
-    const qty = row.Column6;
-    const col10 = row.Column10;
-
-    if (ntk && typeof ntk === 'string' && /^[0-9A-Za-z]+$/.test(ntk)
-        && qty !== undefined && typeof qty === 'number' && qty > 0) {
-      if (!itemsMap[ntk]) {
-        itemsMap[ntk] = { qty: 0 };
-      }
-      itemsMap[ntk].qty += qty;
-    }
-    if (col10 !== undefined && typeof col10 === 'number' && po === null) {
-      po = String(col10);
-    }
-  }
-
-  const count = Object.keys(itemsMap).length;
-  if (count === 0) {
-    throw new Error('Không tìm thấy mã hàng nào trong file JSON.');
-  }
-
-  let imported = 0;
-  await db.withTransactionAsync(async () => {
-    for (const ntk of Object.keys(itemsMap)) {
-      await db.runAsync(
-        `INSERT OR REPLACE INTO items (ntk, po, target, order_batch_id) VALUES (?, ?, ?, ?)`,
-        [ntk, po || '', itemsMap[ntk].qty, batchId]
-      );
-      imported++;
-    }
-    const total = await db.getFirstAsync(
-      `SELECT SUM(target) as total FROM items WHERE order_batch_id = ?`,
-      [batchId]
+  const problems = [];
+  let n = 0;
+  for (const [i, r] of rows.entries()) {
+    const po = String(r?.po ?? '').trim();
+    const code = String(r?.ntk ?? r?.item_code ?? '').trim();
+    if (!po || !code) { problems.push(`Dòng ${i + 1}: thiếu PO hoặc mã hàng`); continue; }
+    const target = parseQty(r?.target);
+    if (target === null || target < 0) { problems.push(`Dòng ${i + 1}: số lượng không hợp lệ`); continue; }
+    const poRow = await db.getFirstAsync(
+      `SELECT id FROM pos WHERE order_batch_id = ? AND code = ?`, [bid, po]
     );
-    await db.runAsync(
-      `UPDATE order_batches SET total_target = ? WHERE id = ?`,
-      [total?.total || 0, batchId]
+    if (!poRow) { problems.push(`Dòng ${i + 1}: PO ${po} không có trong đơn`); continue; }
+    const r2 = await db.runAsync(
+      `INSERT INTO order_lines (po_id, item_code, target) VALUES (?, ?, ?)
+       ON CONFLICT(po_id, item_code) DO UPDATE SET target = excluded.target`,
+      [poRow.id, code, target]
     );
-  });
-
-  return { imported, totalItems: count };
-}
-
-// ---------- CONTAINER DATA ----------
-
-export async function fetchContainerData(batchId) {
-  const db = await getDb();
-  const row = await db.getFirstAsync(
-    `SELECT data FROM container_data WHERE batch_id = ?`,
-    [batchId]
-  );
-  if (!row || !row.data) return null;
-  try {
-    return JSON.parse(row.data);
-  } catch {
-    return null;
+    n += r2.changes > 0 ? 1 : 1;
   }
-}
-
-function parsePackingListContainers(data) {
-  const dataObj = typeof data === 'string' ? JSON.parse(data) : data;
-
-  const summaryKey = '\u7e3d\u8868';
-  const summaryData = dataObj[summaryKey];
-
-  const palletItems = {};
-  let po = null;
-
-  if (Array.isArray(summaryData)) {
-    for (const row of summaryData) {
-      if (!row || typeof row !== 'object') continue;
-      const palletNo = row.Column2;
-      const ntk = row.Column4;
-      const qty = row.Column6;
-      const col10 = row.Column10;
-
-      if (palletNo !== undefined && typeof palletNo === 'number' &&
-          ntk && typeof ntk === 'string' && /^[0-9A-Za-z]+$/.test(ntk) &&
-          qty !== undefined && typeof qty === 'number' && qty > 0) {
-        if (!palletItems[palletNo]) palletItems[palletNo] = [];
-        palletItems[palletNo].push({ ntk, qty });
-      }
-      if (col10 !== undefined && typeof col10 === 'number' && po === null) {
-        po = String(col10);
-      }
-    }
-  }
-
-  const containerKeys = Object.keys(dataObj).filter(
-    k => k !== summaryKey && Array.isArray(dataObj[k])
-  );
-
-  const containers = [];
-  for (const ckey of containerKeys) {
-    const containerRows = dataObj[ckey];
-    let palletRange = null;
-
-    for (const row of containerRows) {
-      if (!row || typeof row !== 'object') continue;
-      const col1 = row.Column1;
-      if (col1 && typeof col1 === 'string' && col1.includes('Pallet')) {
-        const match = col1.match(/Pallet\s+(\d+)-(\d+)/);
-        if (match) {
-          palletRange = { start: parseInt(match[1]), end: parseInt(match[2]) };
-        }
-      }
-    }
-
-    if (palletRange) {
-      const pallets = [];
-      for (let p = palletRange.start; p <= palletRange.end; p++) {
-        const items = palletItems[p] || [];
-        if (items.length > 0) {
-          pallets.push({ no: p, items });
-        }
-      }
-      if (pallets.length > 0) {
-        containers.push({
-          id: ckey,
-          label: `Container ${containers.length + 1}`,
-          po: po || '',
-          pallets
-        });
-      }
-    }
-  }
-
-  return containers;
-}
-
-export async function importContainerData(batchId, jsonData) {
-  const db = await getDb();
-  const containers = parsePackingListContainers(jsonData);
-
-  if (containers.length === 0) {
-    throw new Error('Không tìm thấy dữ liệu container trong file JSON.');
-  }
-
-  const palletsTotal = containers.reduce((s, c) => s + c.pallets.length, 0);
-  const now = new Date().toISOString().slice(0, 10);
-  const containerJson = JSON.stringify(containers);
-
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
-      `INSERT OR REPLACE INTO container_data (batch_id, data, created_at) VALUES (?, ?, ?)`,
-      [batchId, containerJson, now]
-    );
-    await db.runAsync(
-      `UPDATE order_batches SET pallets_total = ? WHERE id = ?`,
-      [palletsTotal, batchId]
-    );
-  });
-
-  return { containers: containers.length, pallets: palletsTotal };
+  return done({ imported: n, total: rows.length, problems });
 }

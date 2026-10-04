@@ -19,11 +19,26 @@ npx expo lint               # lint
 npx tsc --noEmit            # typecheck
 npx expo-doctor             # diagnose dependency and config issues
 npx expo install --fix      # fix incompatible package versions
-npm test                    # unit test hàm thuần (utils/validateQty.js, utils/palletKey.js), không cần Expo/SQLite
+npm test                    # 13 script unit + 7 kịch bản E2E / 825 ca: unit test hàm thuần (utils/validateQty.js, utils/palletKey.js, utils/deleteItem.js, utils/poSummary.js, utils/itemRows.js, utils/deleteItemsByPo.js, utils/date.js, utils/archiveDelete.js, utils/packingV1.js, utils/importFormat.js, utils/packingV1Import.js, utils/schemaColumns.js) + schema mới trên SQLite thật (scripts/test-schemaV2.mjs) + 2 kịch bản E2E khởi tạo DB (scripts/test-dbInit.mjs), không cần Expo/máy thật
 npm run test:pallet         # chỉ test khoá pallet / remap trạng thái tick (FEAT-10)
+npm run test:deletePo       # chỉ test xoá hàng loạt theo PO (FEAT-13)
+npm run test:date           # chỉ test ngày cục bộ (BUG-02)
+npm run test:archive        # chỉ test thông báo xoá đơn lưu trữ (FEAT-15)
+npm run test:packing        # chỉ test converter packing list schema_version 1 → legacy (FEAT-16)
+npm run test:format         # chỉ test nhận diện/đếm định dạng file import (FEAT-16)
+npm run test:packingImport  # chỉ test kế hoạch import packing_data.json + 4 trường mỗi mã (FEAT-17)
+npm run test:schema         # chỉ test cột migration idempotent / an toàn tên cột (BUGFIX-08)
+npm run test:migrations     # ⚠️ TẠM GỎ (FEAT-21 pha 6): test chuỗi migration cũ, đã bị bỏ hẳn. Đã gỡ khỏi `npm test`
+npm run test:schemaV2       # schema mới (9 bảng + 2 view) trên SQLite thật + Dmac.json thật — 39 ca (FEAT-21)
+npm run test:itemRows       # chỉ test tách dòng mã nhiều PO + bộ lọc (FEAT-19)
+npm run test:dbInit         # E2E tầng khởi tạo DB: chạy src/db/index.js nguyên bản với expo-sqlite giả (BUGFIX-08)
+npm run convert:packing      # packing_data.json → src/data/packing_legacy/packing_legacy.json (file ĐỂ IMPORT VÀO APP)
 ```
 
 Run lint and typecheck before declaring any task done.
+
+> Lỗi `Parse errors in imported module '@/db/queries'` ở file **không** sửa ⇒ cache ESLint bị bẩn
+> (`expo lint` dùng `--cache` trong `.expo/cache/eslint/`). Chạy `rm -rf .expo/cache/eslint` rồi lint lại.
 
 ## Navigation & Routing
 
