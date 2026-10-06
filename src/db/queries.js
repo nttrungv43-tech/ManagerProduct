@@ -74,6 +74,82 @@ export async function fetchItemsWithStats(batchId) {
     gw_kg: r.gw_kg,
     volume_cbm: r.volume_cbm,
     package_count: r.package_count,
+    // FEAT-22: chuỗi `ref_no:target` của riêng thẻ (xem `v_line_progress`). `NULL` ⇒ `[]` (INV-I1).
+    refs: parseRefs(r.refs),
+    // FEAT-23: `ref:đã_làm:kế_hoạch` + sản lượng chưa gắn số hiệu.
+    refProgress: parseRefProgress(r.ref_progress),
+    unattributedProduced: num(r.unattributed_produced),
+  }));
+}
+
+/**
+ * FEAT-22 — tách chuỗi `ref:target,ref:target` của view thành `[{ ref_no, target }]`.
+ *
+ * Cố tình **không** tách thành 2 chuỗi rồi `zip` lại: `GROUP_CONCAT` không bảo đảm thứ tự nên hai
+ * chuỗi đó có thể lệch nhau ⇒ ref sẽ mang số của ref khác. Một chuỗi thì việc ghép cặp là bản chất.
+ *
+ * Mục rác dạng `ref:` (thiếu số) hoặc `:5` (thiếu ref) bị bỏ — không hiển thị dữ liệu nửa vời.
+ */
+function parseRefs(packed) {
+  if (!packed) return [];
+  const out = [];
+  for (const chunk of String(packed).split(',')) {
+    const i = chunk.lastIndexOf(':');
+    if (i <= 0) continue;
+    const ref_no = chunk.slice(0, i);
+    const target = Number(chunk.slice(i + 1));
+    if (!ref_no || !Number.isFinite(target)) continue;
+    out.push({ ref_no, target });
+  }
+  return out;
+}
+
+/**
+ * FEAT-23 — tách chuỗi `ref:produced:target` của view thành `[{ ref_no, produced, target }]`.
+ *
+ * Cùng nguyên tắc `parseRefs`: một chuỗi, ghép cặp là bản chất, không phụ thuộc thứ tự `GROUP_CONCAT`.
+ * Mục thiếu/thừa số (`a:b`, `a:b:c:d`) bị bỏ thay vì hiển thị dữ liệu nửa vời.
+ */
+function parseRefProgress(packed) {
+  if (!packed) return [];
+  const out = [];
+  for (const chunk of String(packed).split(',')) {
+    const parts = chunk.split(':');
+    if (parts.length !== 3) continue;
+    const [ref_no, produced, target] = parts;
+    const pr = Number(produced);
+    const tr = Number(target);
+    if (!ref_no || !Number.isFinite(pr) || !Number.isFinite(tr)) continue;
+    out.push({ ref_no, produced: pr, target: tr });
+  }
+  return out;
+}
+
+/**
+ * FEAT-22 — số hiệu nhà máy của một đơn, gom theo **dòng đơn hàng** (PO × mã).
+ *
+ * Hàm **mới**, không đổi chữ ký hàm nào. Dùng cho màn hình chi tiết kiện sau này (FEAT-23); tab
+ * Mã hàng chỉ cần `refs` đã gộp trong `fetchItemsWithStats`.
+ */
+export async function fetchLineRefsForBatch(batchId) {
+  const db = await getDb();
+  const id = batchId ?? (await getActiveBatchId(db));
+  if (!id) return [];
+  const rows = await db.getAllAsync(
+    `SELECT r.order_line_id, r.ref_no, r.target, l.item_code, p.code AS po
+     FROM order_line_refs r
+     JOIN order_lines l ON l.id = r.order_line_id
+     JOIN pos p ON p.id = l.po_id
+     WHERE p.order_batch_id = ?
+     ORDER BY p.code, l.item_code, r.ref_no`,
+    [id]
+  );
+  return rows.map(r => ({
+    order_line_id: r.order_line_id,
+    ntk: r.item_code,
+    po: r.po,
+    ref_no: r.ref_no,
+    target: num(r.target),
   }));
 }
 
@@ -109,9 +185,11 @@ export async function fetchPoSummaries(batchId) {
 export async function fetchEntriesForLine(orderLineId) {
   const db = await getDb();
   if (!orderLineId) return [];
+  // FEAT-23: cột `ref_no` = số hiệu đã gắn. `NULL` = nhật ký chưa gắn số hiệu (không bịa ref — AC-RF-07).
   return db.getAllAsync(
     `SELECT pe.id, pe.date, pe.qty, pe.line, pe.defect_qty, pe.order_line_id,
-            GROUP_CONCAT(pd.type) AS defect_types
+            GROUP_CONCAT(pd.type) AS defect_types,
+            (SELECT er.ref_no FROM production_entry_refs er WHERE er.entry_id = pe.id) AS ref_no
      FROM production_entries pe
      LEFT JOIN production_defects pd ON pd.entry_id = pe.id
      WHERE pe.order_line_id = ?
@@ -158,6 +236,14 @@ async function checkLineTarget(db, orderLineId, qty, excludeEntryId = null) {
   const target = num(line.target);
   const produced = num(row?.produced);
   // target = 0 ⇒ không áp hạn mức (giữ đúng hành vi bản cũ, SPEC-data.md §5.4).
+  //
+  // ⚠️ BUG (có sẵn từ FEAT-21, **chưa** sửa trong phạm vi FEAT-23): `checkQtyLimit` nhận **object**
+  // `{ target, produced, incomingQty, hasLimit }` nhưng chỗ này gọi theo **vị trí** ⇒ 4 đối số rơi
+  // vào tham số đầu tiên (`target` trở thành `produced`), còn `incomingQty` luôn rỗng ⇒
+  // `checkQtyLimit` trả `{ok:true}` **luôn**. Hệ quả: `INV-V1` (`SUM entries ≤ target`) **không
+  // được kiểm ở tầng DB** trên app thật — chỉ UI tự tin là cản. Gọi lại đúng dạng object sẽ khôi
+  // phục hành vi cũ, nhưng đó là thay đổi hành vi Cấp 3 (người dùng đang nhập vượt hạn mức sẽ bị chặn)
+  // ⇒ cần chủ dự án duyệt riêng. `checkRefTarget` của FEAT-23 **không** dùng bản này.
   if (target > 0) {
     const limit = await checkQtyLimit(produced, qty, target, line.item_code ?? '');
     if (!limit.ok) return limit;
@@ -165,8 +251,48 @@ async function checkLineTarget(db, orderLineId, qty, excludeEntryId = null) {
   return { ok: true, target, produced };
 }
 
+/**
+ * FEAT-23 — hạn mức **theo số hiệu**: `Σ qty` của một ref ≤ `order_line_refs.target` (INV-R5).
+ *
+* Kiểm ở đây chứ không chỉ ở UI — cùng lý do `INV-V1`. `checkLineTarget` **không** bị thay: ref là hạn
+ * mức **thêm**, tổng vẫn chặn theo dòng đơn hàng (INV-V1 không nới).
+ *
+ * @param {number|null} excludeEntryId khi sửa, bỏ dòng đang sửa ra khỏi tổng (AC-RF-12)
+ * @returns {{ok: true}|{ok: false, code: string, ref_no?: string}}
+ */
+async function checkRefTarget(db, orderLineId, refNo, qty, excludeEntryId = null) {
+  const ref = String(refNo ?? '').trim();
+  if (!ref) return { ok: true }; // không gắn ref ⇒ hành vi cũ, không có hạn mức riêng
+
+  const meta = await db.getFirstAsync(
+    `SELECT lr.target FROM order_line_refs lr WHERE lr.order_line_id = ? AND lr.ref_no = ?`,
+    [orderLineId, ref]
+  );
+  // Ref không thuộc dòng này: không có hạn mức để so. FK tổng hợp sẽ chặn lúc INSERT, nhưng báo lỗi
+  // rõ ở đây thì người dùng thấy nguyên nhân thay vì một lỗi SQL trần.
+  if (!meta) return fail('REF_NOT_FOUND', { ref_no: ref });
+
+  const row = await db.getFirstAsync(
+    `SELECT COALESCE(SUM(e.qty), 0) AS produced
+     FROM production_entries e
+     JOIN production_entry_refs er ON er.entry_id = e.id
+     WHERE er.order_line_id = ? AND er.ref_no = ? AND (? IS NULL OR e.id != ?)`,
+    [orderLineId, ref, excludeEntryId, excludeEntryId]
+  );
+  const target = num(meta.target);
+  const produced = num(row?.produced);
+  // `target = 0` ⇒ không áp hạn mức, giữ đúng cách `checkLineTarget` xử lý target 0 (SPEC-data.md §5.4).
+  if (target > 0) {
+    // Gọi đúng **dạng object** của `checkQtyLimit`. Xem BUG-NOTE ở `checkLineTarget`: hàm đó đang
+    // gọi theo vị trí nên hạn mức tổng hiện không có tác dụng — không nhân bản lỗi đó ở đây.
+    const limit = await checkQtyLimit({ target, produced, incomingQty: qty });
+    if (!limit.ok) return { ...limit, ref_no: ref };
+  }
+  return { ok: true };
+}
+
 /** Thêm một mục nhật ký sản xuất vào một thẻ (dòng đơn hàng). */
-export async function addEntry(orderLineId, { date, qty, line, defectQty, defectTypes }) {
+export async function addEntry(orderLineId, { date, qty, line, defectQty, defectTypes, refNo = null }) {
   const db = await getDb();
   const q = parseQty(qty);
   if (q === null || q <= 0) return fail('INVALID_QTY', { ntk: '' });
@@ -178,6 +304,9 @@ export async function addEntry(orderLineId, { date, qty, line, defectQty, defect
 
   const ok = await checkLineTarget(db, orderLineId, q);
   if (!ok.ok) return fail(ok.code, ok);
+  // FEAT-23: hạn mức theo số hiệu, kiểm sau hạn mức tổng để lỗi nào cũng không ghi DB.
+  const refOk = await checkRefTarget(db, orderLineId, refNo, q);
+  if (!refOk.ok) return refOk;
 
   return db.withTransactionAsync(async () => {
     const res = await db.runAsync(
@@ -186,12 +315,23 @@ export async function addEntry(orderLineId, { date, qty, line, defectQty, defect
       [orderLineId, d, q, lineKind, defect]
     );
     await writeDefects(db, res.lastInsertRowId, defect, defectTypes);
+    await writeEntryRef(db, res.lastInsertRowId, orderLineId, refNo);
     return done({ id: res.lastInsertRowId });
   });
 }
 
+/** FEAT-23 — ghi (hoặc không) số hiệu của một mục nhật ký. Rỗng ⇒ không có dòng = chưa gắn. */
+async function writeEntryRef(db, entryId, orderLineId, refNo) {
+  const ref = String(refNo ?? '').trim();
+  if (!ref) return;
+  await db.runAsync(
+    `INSERT INTO production_entry_refs (entry_id, order_line_id, ref_no) VALUES (?, ?, ?)`,
+    [entryId, orderLineId, ref]
+  );
+}
+
 /** Sửa một mục nhật ký. */
-export async function updateEntry(entryId, { date, qty, line, defectQty, defectTypes }) {
+export async function updateEntry(entryId, { date, qty, line, defectQty, defectTypes, refNo = undefined }) {
   const db = await getDb();
   const cur = await db.getFirstAsync(
     `SELECT order_line_id FROM production_entries WHERE id = ?`, [entryId]
@@ -206,6 +346,18 @@ export async function updateEntry(entryId, { date, qty, line, defectQty, defectT
   const ok = await checkLineTarget(db, cur.order_line_id, q, entryId);
   if (!ok.ok) return fail(ok.code, ok);
 
+  // FEAT-23: `refNo === undefined` ⇒ giữ nguyên ref đang gắn (form sửa không nhắc tới ref vẫn chạy
+  // đúng như cũ). `null`/rỗng ⇒ **bỏ** gắn ref. Chuỗi ⇒ đổi sang ref đó.
+  let nextRef = refNo;
+  if (nextRef === undefined) {
+    const cur2 = await db.getFirstAsync(
+      `SELECT ref_no FROM production_entry_refs WHERE entry_id = ?`, [entryId]
+    );
+    nextRef = cur2?.ref_no ?? '';
+  }
+  const refOk = await checkRefTarget(db, cur.order_line_id, nextRef, q, entryId);
+  if (!refOk.ok) return refOk;
+
   const lineKind = line === 'auto' ? 'auto' : 'manual';
   const defect = Math.max(parseQty(defectQty) ?? 0, 0);
 
@@ -216,8 +368,15 @@ export async function updateEntry(entryId, { date, qty, line, defectQty, defectT
     );
     await db.runAsync(`DELETE FROM production_defects WHERE entry_id = ?`, [entryId]);
     await writeDefects(db, entryId, defect, defectTypes);
+    await setEntryRef(db, entryId, cur.order_line_id, nextRef);
     return done({ id: entryId });
   });
+}
+
+/** FEAT-23 — đặt lại (hoặc bỏ) số hiệu của một mục nhật ký. Xoá rồi ghi lại để không cần phân biệt. */
+async function setEntryRef(db, entryId, orderLineId, refNo) {
+  await db.runAsync(`DELETE FROM production_entry_refs WHERE entry_id = ?`, [entryId]);
+  await writeEntryRef(db, entryId, orderLineId, refNo);
 }
 
 /** Xoá một mục nhật ký. */
@@ -385,9 +544,12 @@ export async function fetchContainersView(batchId) {
   const id = batchId ?? (await getActiveBatchId(db));
   if (!id) return [];
   const ct = await db.getAllAsync(
+    // FEAT-23 §sort: `ORDER BY c.id` (tăng dần theo thứ tự tạo), **không** `c.container_no` —
+    // `container_no` là TEXT (ví dụ `MCCU1123643`) nên `CAST(... AS INTEGER)` sẽ sai và sắp xếp
+    // chuỗi `"1".."12"` thành `"1,10,2"` nếu là số. `id` tự tăng nên luôn "tăng dần" đúng nghĩa.
     `SELECT c.id, c.container_no, c.seal_no, p.code AS po
      FROM containers c JOIN pos p ON p.id = c.po_id
-     WHERE c.order_batch_id = ? ORDER BY c.container_no`,
+     WHERE c.order_batch_id = ? ORDER BY c.id`,
     [id]
   );
   if (ct.length === 0) return [];
@@ -741,6 +903,9 @@ export async function importPackingV1(batchId, jsonData) {
       [batchIdToUse]
     );
     await db.runAsync(`DELETE FROM containers WHERE order_batch_id = ?`, [batchIdToUse]);
+    // FEAT-22: `order_line_refs` khai báo `ON DELETE CASCADE` từ `order_lines` ⇒ câu xoá dưới đây
+    // đã xoá luôn số hiệu. **Cố ý không** thêm `DELETE FROM order_line_refs`: xoá tay rồi lại xoá
+    // ở trên là dư, và dễ lệch khi ai đó đổi `ON DELETE CASCADE` sau này.
     await db.runAsync(
       `DELETE FROM order_lines WHERE po_id IN (SELECT id FROM pos WHERE order_batch_id = ?)`,
       [batchIdToUse]
@@ -759,19 +924,33 @@ export async function importPackingV1(batchId, jsonData) {
     }
 
     const lineIds = [];
-    for (const l of plan.lines) {
+    const lineIdxByPosItem = new Map();
+    for (const [i, l] of plan.lines.entries()) {
       const r = await db.runAsync(
         `INSERT INTO order_lines (po_id, item_code, target, nw_kg, gw_kg, volume_cbm, package_count)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [posIds[l.poIdx], l.itemCode, l.target, l.nw_kg, l.gw_kg, l.volume_cbm, l.package_count]
       );
       lineIds.push(r.lastInsertRowId);
+      lineIdxByPosItem.set(`${l.poIdx}\u0000${l.itemCode}`, i);
     }
 
     for (const r of plan.refs) {
       await db.runAsync(
         `INSERT OR IGNORE INTO item_refs (order_batch_id, item_code, ref_no) VALUES (?, ?, ?)`,
         [batchIdToUse, r.itemCode, r.refNo]
+      );
+    }
+
+    // FEAT-22: số hiệu của **riêng (PO × mã)**. `lineRefIdx` dựng từ chính `lineIds` vừa tạo nên
+    // không cần tra cứu lại DB — cùng thứ tự chỉ số mà `buildLinePlan` đã dùng.
+    for (const lr of plan.lineRefs) {
+      const lineIdx = lineIdxByPosItem.get(`${lr.poIdx}\u0000${lr.itemCode}`);
+      // Dòng hàng không có trong `item_summary` ⇒ bỏ, không đoán (không ghi FK hỏng).
+      if (lineIdx === undefined) continue;
+      await db.runAsync(
+        `INSERT OR IGNORE INTO order_line_refs (order_line_id, ref_no, target) VALUES (?, ?, ?)`,
+        [lineIds[lineIdx], lr.refNo, lr.target]
       );
     }
 

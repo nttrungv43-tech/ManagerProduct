@@ -269,11 +269,16 @@ export function pctClass(pct) {
   return 'low';
 }
 
-/** Danh sách PO của đơn — mỗi thẻ mang **đúng một** PO nên không còn tách chuỗi `+`. */
+/**
+ * Danh sách PO của đơn — mỗi thẻ mang **đúng một** PO nên không còn tách chuỗi `+`.
+ *
+ * FEAT-23 §sort: sắp xếp **tăng dần theo số**. `po` là số dạng chuỗi (`'2919'`) nên `localeCompare`
+ * sẽ sai với các mã khác độ dài (`'60' > '500'` trong so sánh chuỗi). So sánh số trước, chỉ tới
+ * `localeCompare` khi một trong hai không phải số — tránh sai với PO lẻ không mang số.
+ */
 export function allPOs(items) {
-  const s = new Set();
-  items.forEach(it => { if (it.po) s.add(it.po); });
-  return [...s];
+  return Array.from(new Set(items.flatMap(it => (it.po ? [it.po] : []))))
+    .sort((a, b) => Number(a) - Number(b) || String(a).localeCompare(String(b)));
 }
 
 export function filteredItems(state) {

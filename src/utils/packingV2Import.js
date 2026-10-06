@@ -56,7 +56,7 @@ export function buildOrderPlan(json) {
 }
 
 /**
- * Bước 2 — `order_lines` + `item_refs`.
+ * Bước 2 — `order_lines` + `item_refs` + `order_line_refs`.
  *
  * `target` lấy từ `item_summary` của **từng shipment** ⇒ đây là số của riêng PO đó, đúng thứ bản
  * cũ không làm được (nó cộng dồn rồi tự suy diễn ngược). `Dmac.json` đã tính sẵn và `checks.ok`
@@ -66,7 +66,8 @@ export function buildOrderPlan(json) {
  *
  * @param {object} json
  * @param {PoRow[]} posRows kết quả `buildOrderPlan().pos` (dùng để tra `po` → chỉ số)
- * @returns {{lines: Array<object>, refs: Array<{itemCode: string, refNo: string}>}}
+ * @returns {{lines: Array<object>, refs: Array<{itemCode: string, refNo: string}>,
+ *            lineRefs: Array<{poIdx: number, itemCode: string, refNo: string, target: number}>}}
  */
 export function buildLinePlan(json, posRows) {
   const poIndex = new Map(posRows.map((p, i) => [p.code, i]));
@@ -94,8 +95,19 @@ export function buildLinePlan(json, posRows) {
   }
 
   // Số hiệu nhà máy nằm ở tầng **kiện** (`packages[].items[].order_ref`), không có ở `item_summary`.
+  //
+  // FEAT-22: gom **hai** cách, vì chúng ở hai tầng khác nhau và cả hai đều cần:
+  //   • `refs`     — (mã, ref) cho bảng `item_refs`: "mã này có mấy số hiệu" (55 dòng).
+  //   • `lineRefs` — (PO, mã, ref, target) cho bảng `order_line_refs`: số hiệu của **riêng thẻ**.
+  //
+  // `target` của ref = tổng `qty` các kiện mang ref đó. Đo trên `Dmac.json`: tổng này bằng đúng
+  // `order_lines.target` của dòng đó (76/76) nên đây là dữ liệu thật, không phải chia đều.
+  // `refs` giữ dùng chỗ cũ (một `(mã, ref)` có thể ở nhiều PO) — không dùng nó để hiển thị thẻ.
+  const lineRefQty = new Map(); // key = `${poIdx}\u0000${itemCode}\u0000${refNo}`
   for (const b of Array.isArray(json?.batches) ? json.batches : []) {
     for (const sh of b?.shipments ?? []) {
+      const poIdx = poIndex.get(String(sh?.po_no ?? '').trim());
+      if (poIdx === undefined) continue;
       for (const ct of sh?.containers ?? []) {
         for (const pkg of ct?.packages ?? []) {
           for (const it of pkg?.items ?? []) {
@@ -103,13 +115,21 @@ export function buildLinePlan(json, posRows) {
             const refNo = String(it?.order_ref ?? '').trim();
             if (!itemCode || !refNo) continue;
             refs.set(`${itemCode}\u0000${refNo}`, { itemCode, refNo });
+            const key = `${poIdx}\u0000${itemCode}\u0000${refNo}`;
+            lineRefQty.set(key, (lineRefQty.get(key) ?? 0) + toInt(it?.qty));
           }
         }
       }
     }
   }
 
-  return { lines, refs: [...refs.values()] };
+  const lineRefs = [];
+  for (const [key, target] of lineRefQty) {
+    const [poIdx, itemCode, refNo] = key.split('\u0000');
+    lineRefs.push({ poIdx: Number(poIdx), itemCode, refNo, target });
+  }
+
+  return { lines, refs: [...refs.values()], lineRefs };
 }
 
 /**
@@ -185,9 +205,9 @@ export function buildPalletPlan(json, posRows, lines) {
 /** Kế hoạch đầy đủ cho một lần nhập `packing_data.json`. */
 export function buildImportPlanV2(json) {
   const { order, pos } = buildOrderPlan(json);
-  const { lines, refs } = buildLinePlan(json, pos);
+  const { lines, refs, lineRefs } = buildLinePlan(json, pos);
   const { containers, pallets, palletLines } = buildPalletPlan(json, pos, lines);
-  return { order, pos, lines, refs, containers, pallets, palletLines };
+  return { order, pos, lines, refs, lineRefs, containers, pallets, palletLines };
 }
 
 // ── helper ──────────────────────────────────────────────────────────────────

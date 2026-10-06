@@ -23,6 +23,31 @@ const V1_ENTRY_COLUMNS = [
 /** Cột FEAT-17 (migration v3). Stub dùng danh sách này để kiểm tra `SELECT`. */
 const METRIC_COLUMNS = ['nw_kg', 'gw_kg', 'volume_cbm', 'package_count'];
 
+/**
+ * BUGFIX-23 — cột **đầy đủ** của từng bảng trong thiết kế mới (FEAT-21+), dùng để mô phỏng
+ * file DB của một build **trung gian**: đúng *tên bảng* nhưng thiếu *cột*.
+ *
+ * Nhân vật chính của lỗi `no such column: order_line_id` (2026-10-05): `isLegacyDb()` cũ chỉ
+ * nhìn tên bảng nên cho file đó là "đúng schema", `CREATE TABLE IF NOT EXISTS` thành no-op, rồi
+ * `CREATE INDEX … (order_line_id)` nổ. Stub phải **ném đúng lỗi đó** thì test mới có tác dụng.
+ */
+const NEW_DESIGN_COLUMNS = {
+  order_batches: ['id', 'status', 'finished_date', 'source_file', 'mark', 'imported_at'],
+  pos: ['id', 'order_batch_id', 'code', 'consignee', 'address', 'destination', 'invoice_no'],
+  order_lines: ['id', 'po_id', 'item_code', 'target', 'nw_kg', 'gw_kg', 'volume_cbm', 'package_count'],
+  item_refs: ['id', 'order_batch_id', 'item_code', 'ref_no'],
+  order_line_refs: ['order_line_id', 'ref_no', 'target'],
+  production_entries: ['id', 'order_line_id', 'date', 'qty', 'line', 'defect_qty'],
+  production_defects: ['entry_id', 'type'],
+  production_entry_refs: ['entry_id', 'order_line_id', 'ref_no'],
+  containers: ['id', 'order_batch_id', 'po_id', 'container_no', 'seal_no'],
+  pallets: [
+    'id', 'container_id', 'po_id', 'pallet_no', 'c_no', 'is_mixed',
+    'length_m', 'width_m', 'height_m', 'volume_cbm', 'nw_kg', 'gw_kg',
+  ],
+  pallet_lines: ['id', 'pallet_id', 'order_line_id', 'qty', 'done'],
+};
+
 /** Tên file DB đang giả lập — nhiều kịch bản E2E chạy song song cần tách instance. */
 let targetFile = null;
 /** Đếm số lần `openDatabaseAsync` của từng file. */
@@ -39,6 +64,7 @@ export const openCounts = new Map();
  *   userVersion?: number,
  *   itemColumns?: string[],
  *   entryColumns?: string[],     // FEAT-20: mặc định cột của `entries` trước khi thêm `po`
+ *   columnSets?: Record<string, string[]>, // BUGFIX-23: cột của từng bảng (mô phỏng build trung gian)
  *   activeBatchIds?: number[],
  *   failAlter?: 'all' | string,   // cột (hoặc 'all') mà `ALTER TABLE … ADD COLUMN` phải hỏng
  * }} [initial]
@@ -62,9 +88,33 @@ function createFakeDb(fileName, initial) {
   // FEAT-20: `entries` cũng cần bộ cột riêng — migration v5 thêm `po`, stub phải biết để
   // `PRAGMA table_info(entries)` trả đúng và để `ALTER TABLE entries …` có hiệu lực.
   const entries = new Set(initial.entryColumns ?? V1_ENTRY_COLUMNS);
-  const columnsOf = table => (table === 'entries' ? entries : items);
+  // BUGFIX-23: bảng của thiết kế mới. `initial.columnSets` cho phép kịch bản mô phỏng DB của
+  // build trung gian (thiếu `order_line_id`…) — mặc định thì đủ cột.
+  const columnSets = { entries, items };
+  for (const [table, cols] of Object.entries(NEW_DESIGN_COLUMNS)) {
+    columnSets[table] = new Set(cols);
+  }
+  for (const [table, cols] of Object.entries(initial.columnSets ?? {})) {
+    columnSets[table] = new Set(cols);
+  }
+  /** Cột của bảng, hoặc `null` nếu stub không theo dõi bảng đó. */
+  const columnsOf = table => columnSets[table] ?? null;
   const userVersion = { value: initial.userVersion ?? 0 };
   const activeBatches = [...(initial.activeBatchIds ?? [])];
+
+  /**
+   * Tách tên cột từ thân `CREATE TABLE (...)`. Cần để bảng **mới tạo** có đúng bộ cột khai báo,
+   * và để `CREATE TABLE IF NOT EXISTS` trên bảng đã có là **no-op** đúng như SQLite.
+   */
+  const parseCreateColumns = q => {
+    const body = /\(([\s\S]*)\)\s*$/.exec(q)?.[1] ?? '';
+    const cols = [];
+    for (const line of body.split('\n')) {
+      const m = /^\s{2}([a-z_]\w*)\s+[A-Z]/.exec(line);
+      if (m) cols.push(m[1]);
+    }
+    return cols;
+  };
 
   const db = {
     fileName,
@@ -76,6 +126,25 @@ function createFakeDb(fileName, initial) {
       if (!/\bitems\b/.test(sql)) return;
       for (const col of METRIC_COLUMNS) {
         if (new RegExp(`\\b${col}\\b`).test(sql) && !items.has(col)) {
+          const e = new Error(`no such column: ${col}`);
+          e.code = 'SQLITE_ERROR';
+          throw e;
+        }
+      }
+    },
+
+    /**
+     * BUGFIX-23 — `CREATE INDEX … ON <bảng>(<cột>…)` phải **ném** `no such column` khi bảng đó
+     * thiếu cột. Đây chính xác là lỗi gặp thật trên thiết bị: `CREATE TABLE IF NOT EXISTS`
+     * no-op vì bảng đã tồn tại (do build trung gian tạo) nhưng thiếu `order_line_id`.
+     */
+    _assertIndexColumns(q) {
+      const m = /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?\w+\s+ON\s+(\w+)\s*\(([^)]*)\)/i.exec(q);
+      if (!m) return;
+      const cols = columnsOf(m[1]);
+      if (!cols) return; // bảng stub không theo dõi ⇒ không giả vờ thành công cũng không giả vờ hỏng
+      for (const col of m[2].split(',').map(s => s.trim().split(/\s+/)[0])) {
+        if (!cols.has(col)) {
           const e = new Error(`no such column: ${col}`);
           e.code = 'SQLITE_ERROR';
           throw e;
@@ -108,12 +177,21 @@ function createFakeDb(fileName, initial) {
           userVersion.value = Number(m[1]);
           continue;
         }
+        // BUGFIX-23: `CREATE INDEX` có thể hỏng vì thiếu cột — phải ném trước khi ta cảnh báo.
+        if (/^CREATE\s+(UNIQUE\s+)?INDEX/i.test(q)) db._assertIndexColumns(q);
         // FEAT-21: ghi nhận bảng mới tạo để lần đọc `sqlite_master` sau trả về đúng.
         if ((m = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/i.exec(q))) {
+          const existed = state.tables?.has(m[1]);
           state.tables = state.tables ?? new Set();
           state.tables.add(m[1]);
+          // Bảng **đã có** ⇒ `IF NOT EXISTS` là no-op: giữ nguyên bộ cột thiếu (đây chính là
+          // cách lỗi `no such column` lọt qua trước BUGFIX-23). Bảng mới ⇒ lấy đúng cột khai báo.
+          if (!existed) {
+            const cols = parseCreateColumns(q);
+            if (cols.length) columnSets[m[1]] = new Set(cols);
+          }
         }
-        // `CREATE INDEX` / `DROP` / `INSERT …` …: không ảnh hưởng bộ cột theo dõi.
+        // `DROP` / `INSERT …` …: không ảnh hưởng bộ cột theo dõi.
       }
     },
 
@@ -124,7 +202,18 @@ function createFakeDb(fileName, initial) {
       let m;
       // FEAT-21: `sqlite_master` để `isLegacyDb()` nhận diện DB cũ.
       if (/sqlite_master/i.test(sql)) {
-        return [...(state.tables ?? [])].map(name => ({ name, type: 'table' }));
+        let names = [...(state.tables ?? [])];
+        // ⚠️ BUGFIX-23: stub **phải** tôn trọng `WHERE … name IN (…)`. Trước đây nó trả về **mọi**
+        // bảng bất kể `WHERE`, nên `legacyReason()` lấy danh sách đã lọc mà vẫn "thấy" được
+        // `pallet_lines` ⇒ vòng kiểm cột chạy đúng ⇒ **test xanh giả**, trong khi app thật thì
+        // `pallet_lines` không có trong danh sách ⇒ vòng kiểm cột bị bỏ qua ⇒ vẫn lỗi
+        // `no such column` trên máy. Giả lập thiếu chính xác làm cho lỗi đó lọt vào test.
+        const inList = /name\s+IN\s*\(([^)]*)\)/i.exec(sql);
+        if (inList) {
+          const allowed = new Set(inList[1].split(',').map(s => s.trim().replace(/^'|'$/g, '')));
+          names = names.filter(n => allowed.has(n));
+        }
+        return names.map(name => ({ name, type: 'table' }));
       }
       if (/PRAGMA\s+foreign_keys/i.test(sql)) return [{ foreign_keys: 1 }];
       if (/PRAGMA\s+user_version/i.test(sql)) return [{ user_version: userVersion.value }];

@@ -30,7 +30,12 @@ export default function ContainersScreen() {
   // FEAT-21: `containerData` là cây từ bảng thật (`containers` → `pallets` → `pallet_lines`),
   // không phải blob JSON, và luôn là mảng ⇒ không còn fallback seed.
   const containers = containerData;
-  const cpos = [...new Set(containers.map(c => c.po).filter(Boolean))];
+  // FEAT-23 §sort: danh sách PO **tăng dần** theo số (`'2919'` < `'2920'` < `'2929'`). `p.code`
+  // là số dạng chuỗi nên `localeCompare` sẽ sai (`'2929'` > `'2919'` nhưng `'60' > '500'`). So sánh
+  // số trước, chỉ tới `localeCompare` khi một trong hai không phải số — tránh sai với PO lẻ
+  // không mang số.
+  const cpos = Array.from(new Set(containers.map(c => c.po).filter(Boolean)))
+    .sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
   const filtered = containers.filter(
     c => activeContainerFilter === 'all' || c.po === activeContainerFilter
   );
@@ -134,8 +139,11 @@ export default function ContainersScreen() {
 
         {filtered.map(c => {
           const isOpen = expandedIds.has(c.id);
+          const sortedPallets = (c.pallets ?? []).sort(
+            (a, b) => (a.pallet_no ?? a.no) - (b.pallet_no ?? b.no)
+          );
           let cDone = 0, totalQty = 0, doneQty = 0;
-          c.pallets.forEach(p => {
+          sortedPallets.forEach(p => {
             const pd = palletDone(p);
             if (pd) cDone++;
             const q = p.items.reduce((s, it) => s + it.qty, 0);
@@ -176,7 +184,7 @@ export default function ContainersScreen() {
                   <TouchableOpacity style={styles.addPalletBtn} onPress={() => openAddPallet(c)}>
                     <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>＋ Thêm kiện</Text>
                   </TouchableOpacity>
-                  {c.pallets.map(p => (
+                  {sortedPallets.map(p => (
                     <PalletRow
                       key={p.id}
                       pallet={p}

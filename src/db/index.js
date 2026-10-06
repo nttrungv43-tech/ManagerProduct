@@ -18,6 +18,7 @@
 import * as SQLite from 'expo-sqlite';
 import {
   DB_FILE, SCHEMA_VERSION, CREATE_TABLES_SQL, CREATE_VIEWS_SQL, enableForeignKeys,
+  REQUIRED_COLUMNS, ADDABLE_COLUMN_DECLS,
 } from './schema';
 import { todayLocal } from '@/utils/date';
 
@@ -36,7 +37,8 @@ export async function getDb() {
   if (!dbReady) {
     dbReady = (async () => {
       let db = await SQLite.openDatabaseAsync(DB_FILE);
-      if (await isLegacyDb(db)) {
+      const reason = await legacyReason(db);
+      if (reason) {
         // ⚠️ PHẢI `closeAsync()` trước khi xoá. SQLite giữ khoá file, và `deleteDatabaseAsync`
         // ném `Unable to delete database … that is currently open` nếu connection còn sống
         // (lỗi gặp thật khi chạy trên máy, 2026-10-04). Không đóng thì app **không khởi động
@@ -52,11 +54,13 @@ export async function getDb() {
         await db.closeAsync();
         await SQLite.deleteDatabaseAsync(DB_FILE);
         db = await SQLite.openDatabaseAsync(DB_FILE);
-        logReset();
+        logReset(reason);
       }
       await enableForeignKeys(db);
+      await repairMissingColumns(db);
       await db.execAsync(CREATE_TABLES_SQL);
       await db.execAsync(CREATE_VIEWS_SQL);
+      await verifyShape(db);
       await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
       await logSchemaState(db);
       await ensureActiveOrder(db);
@@ -73,27 +77,117 @@ export async function getDb() {
 }
 
 /**
- * DB là bản cũ nếu có bảng chỉ bản cũ có, **hoặc** thiếu bảng chỉ bản mới có.
+ * DB phải xoá dựng lại không? Trả về **lý do bằng chữ** (để log lấy làm bằng chứng) hoặc `null`.
  *
  * Cố tình **không** so `user_version`: đó chính là nguồn gốc của BUG-08 (số phiên bản khớp nhưng
  * schema thật thì không). Trả lời bằng **quan sát schema** — cùng nguyên tắc với guard cũ nhưng giờ
  * đơn giản hơn nhiều vì chỉ có một schema.
+ *
+ * ⚠️ Phải kiểm **cả cột**, không chỉ tên bảng — đây là chỗ BUGFIX-23 sửa. Lỗi `no such column:
+ * order_line_id` trên thiết bị (2026-10-05) xảy ra vì file DB của một build trung gian có **đúng
+ * tên bảng** của schema mới nhưng thiếu cột; chỉ nhìn tên bảng thì cho là "đúng schema" ⇒ không
+ * xoá ⇒ `CREATE TABLE IF NOT EXISTS` no-op ⇒ `CREATE INDEX`/view nổ.
  */
-async function isLegacyDb(db) {
-  const rows = await db.getAllAsync(
-    `SELECT name FROM sqlite_master WHERE type='table' AND name IN
-       ('items','item_po','entries','pallet_status','container_data','order_lines','pos')`
-  );
-  const names = new Set(rows.map(r => r.name));
-  const hasOldOnly = ['items', 'item_po', 'pallet_status', 'container_data'].some(n => names.has(n));
-  const missingNew = !names.has('order_lines') || !names.has('pos');
-  return hasOldOnly || missingNew;
+async function legacyReason(db) {
+  // ⚠️ Phải hỏi **hai** lần, không lấy chung một danh sách:
+  //   • `known` — lọc `name IN (…)` để áp hai quy tắc legacy cũ (bảng riêng của bản cũ / bảng riêng
+  //     của bản mới).
+  //   • `all`  — **không** lọc, dùng cho vòng kiểm cột bắt buộc.
+  // Lấy chung một danh sách đã lọc thì `pallet_lines`/`production_entries` không có trong danh
+  // sách ⇒ vòng kiểm cột bị **bỏ qua** ⇒ lại đẩy app vào đúng lỗi `no such column` (đã dính
+  // một lần 2026-10-05: fix có vẻ đúng nhưng không bao giờ chạy tới nhánh đó).
+  const known = await tableNames(db, true);
+  if (known.size === 0) return null; // DB mới (không có bảng nào) ⇒ tạo schema, không reset
+  const hasOldOnly = ['items', 'item_po', 'pallet_status', 'container_data'].some(n => known.has(n));
+  const missingNew = !known.has('order_lines') || !known.has('pos');
+  if (hasOldOnly) return 'thiết kế cũ (có bảng items/item_po/pallet_status/container_data)';
+  if (missingNew) return 'thiết kế cũ (thiếu bảng order_lines/pos)';
+
+  // Bảng có đúng tên nhưng thiếu cột bắt buộc — chỉ biết được bằng cách hỏi `PRAGMA`.
+  const all = await tableNames(db, false);
+  const gaps = [];
+  for (const [table, required] of Object.entries(REQUIRED_COLUMNS)) {
+    if (!all.has(table)) continue;
+    const have = new Set((await db.getAllAsync(`PRAGMA table_info(${table})`)).map(c => c.name));
+    const missing = required.filter(c => !have.has(c));
+    // Cột vá được thì để `repairMissingColumns()` xử lý, không xoá cả DB.
+    const fatal = missing.filter(c => !ADDABLE_COLUMN_DECLS[`${table}.${c}`]);
+    if (fatal.length) gaps.push(`${table} thiếu ${fatal.join(', ')}`);
+  }
+  if (gaps.length) return `schema của một build khác (${gaps.join('; ')})`;
+  return null;
 }
 
-function logReset() {
+/** Danh sách bảng trong file DB. `onlyKnown=true` thì lọc theo danh sách bảng mà `legacyReason()` biết. */
+async function tableNames(db, onlyKnown) {
+  const sql = onlyKnown
+    ? `SELECT name FROM sqlite_master WHERE type='table' AND name IN
+         ('items','item_po','entries','pallet_status','container_data','order_lines','pos')`
+    : `SELECT name FROM sqlite_master WHERE type='table'`;
+  return new Set((await db.getAllAsync(sql)).map(r => r.name));
+}
+
+/**
+ * Tự vá cột **nullable** còn thiếu, không mất dữ liệu (AC-DB-12).
+ *
+ * Chỉ vá loại an toàn: `ALTER TABLE … ADD COLUMN` với `NULL` cho phép hoặc `DEFAULT` hằng.
+ * Cột `NOT NULL`/khoá ngoại không nằm trong `ADDABLE_COLUMN_DECLS` — nếu thiếu thì
+ * `legacyReason()` đã kết luận phải xoá dựng lại, vì đoán giá trị thay người dùng còn tệ hơn.
+ *
+ * Bổ sung: **bằng chứng** vì sao vá (dòng log) — cùng tinh thần AC-DB-10.
+ */
+async function repairMissingColumns(db) {
+  const names = await tableNames(db, false);
+  for (const [table, required] of Object.entries(REQUIRED_COLUMNS)) {
+    if (!names.has(table)) continue; // chưa có ⇒ `CREATE TABLE IF NOT EXISTS` sẽ tạo đủ
+    const have = new Set((await db.getAllAsync(`PRAGMA table_info(${table})`)).map(c => c.name));
+    for (const col of required) {
+      if (have.has(col)) continue;
+      const decl = ADDABLE_COLUMN_DECLS[`${table}.${col}`];
+      if (!decl) continue; // `legacyReason()` đã loại trường hợp này
+      try {
+        await db.execAsync(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
+      } catch (e) {
+        // Nêu **tên bảng + tên cột** thay vì trả nguyên lỗi SQL (`database is locked`) — lỗi mơ
+        // hồ không giúp chẩn đoán được, đó chính là bài học của `no such column: order_line_id`.
+        throw new Error(
+          `Không bổ sung được cột ${table}.${col} (còn thiếu, cần ${decl}): ${e?.message || e}`
+        );
+      }
+      console.log(`[db] Đã bổ sung cột còn thiếu: ${table}.${col} ${decl}`);
+    }
+  }
+}
+
+/**
+ * Xác minh **bằng quan sát** rằng schema sau khi tạo đã đủ bảng và cột — đọc lại `PRAGMA`
+ * chứ không tin lời `CREATE TABLE` vừa chạy (cùng nguyên tắc `ensureItemMetricColumns` cũ của
+ * BUGFIX-08: "xác minh bằng quan sát").
+ *
+ * Nếu vẫn thiếu thì báo **tên bảng và tên cột**. Lỗi SQL mơ hồ kiểu `no such column: order_line_id`
+ * không nói được file DB đó do build nào tạo ra — đó chính là lý do lần này mất thời gian.
+ */
+async function verifyShape(db) {
+  const names = await tableNames(db, false);
+  const problems = [];
+  for (const [table, required] of Object.entries(REQUIRED_COLUMNS)) {
+    if (!names.has(table)) { problems.push(`thiếu bảng ${table}`); continue; }
+    const have = new Set((await db.getAllAsync(`PRAGMA table_info(${table})`)).map(c => c.name));
+    const missing = required.filter(c => !have.has(c));
+    if (missing.length) problems.push(`${table} thiếu cột ${missing.join(', ')}`);
+  }
+  if (problems.length) {
+    throw new Error(
+      `Schema DB không đúng sau khi khởi tạo: ${problems.join('; ')}. `
+      + 'File DB này do một build khác tạo ra — hãy xoá file DB của app rồi mở lại để nó dựng mới.'
+    );
+  }
+}
+
+function logReset(reason) {
   // Dòng log này là **bằng chứng** cho người dùng biết dữ liệu cũ đã bị xoá (chủ dự án đã chấp
   // nhận mất dữ liệu cũ ngày 2026-10-04). Không chặn app.
-  console.log('[db] Phát hiện DB thiết kế cũ → đã xoá và tạo lại theo schema mới (FEAT-21).');
+  console.log(`[db] Phát hiện DB không đúng thiết kế (${reason}) → đã xoá và tạo lại (FEAT-21).`);
 }
 
 async function logSchemaState(db) {

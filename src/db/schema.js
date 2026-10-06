@@ -46,8 +46,19 @@
 
 export const DB_FILE = 'production_tracker.db';
 
-/** Số phiên bản schema. Mốc **mới** = 1, vì bản cũ đã dùng 1..5 — không tái sử dụng số cũ. */
-export const SCHEMA_VERSION = 1;
+/**
+ * Số phiên bản schema. Mốc **mới** = 1, vì bản cũ đã dùng 1..5 — không tái sử dụng số cũ.
+ *
+ * FEAT-22: 2 — thêm bảng `order_line_refs`. **Không** `ALTER`/`DROP` bảng nào, nên `db/index.js`
+ * không cần cơ chế `ALTER` (FEAT-21 đã bỏ hẳn `runMigrations` vì chỉ có một schema). `CREATE TABLE
+ * IF NOT EXISTS` chạy ở **mọi** lần mở app nên DB đã có dữ liệu sẽ có bảng mới mà **không mất
+ * gì** — khác hẳn thêm cột, vốn bắt buộc phải viết lại `runMigrations`.
+ *
+ * FEAT-23: 3 — thêm bảng `production_entry_refs`. Cùng lý do: bảng phụ thay cho
+ * `ALTER production_entries ADD COLUMN order_ref`, và FK tổng hợp của nó chặn ở tầng DB việc
+ * gắn nhầm ref của PO khác.
+ */
+export const SCHEMA_VERSION = 3;
 
 export const CREATE_TABLES_SQL = `
 PRAGMA journal_mode = WAL;
@@ -94,6 +105,7 @@ CREATE TABLE IF NOT EXISTS order_lines (
 CREATE INDEX IF NOT EXISTS ix_lines_code ON order_lines(item_code);
 
 -- 4. Số hiệu nhà máy ('DMAC No.'). Dmac.json có 55 số hiệu cho 49 mã — bản cũ **vứt bỏ**.
+--    Khoá (batch, mã) ⇒ KHÔNG biết ref nào của PO nào (FEAT-22).
 CREATE TABLE IF NOT EXISTS item_refs (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   order_batch_id INTEGER NOT NULL REFERENCES order_batches(id) ON DELETE CASCADE,
@@ -101,6 +113,21 @@ CREATE TABLE IF NOT EXISTS item_refs (
   ref_no        TEXT    NOT NULL,
   UNIQUE (order_batch_id, item_code, ref_no)
 );
+
+-- 4b. (FEAT-22) Số hiệu nhà máy gắn với **DÒNG ĐƠN HÀNG** = (PO × mã), đúng tầng mà thẻ hiển thị.
+--     Vì sao không dùng item_refs: đo trên Dmac.json có **82** cặp (PO × mã × ref) nhưng chỉ
+--     **55** cặp (mã × ref) — 15 cặp dùng ở nhiều PO. Đọc item_refs theo mã sẽ gán ref của PO
+--     khác vào thẻ: "PO 2919 / 106385GF" sẽ hiện cả D980077 (của PO 2921).
+--     target = tổng qty của các kiện mang ref đó. Đã kiểm trên Dmac.json:
+--     Σ target mỗi dòng == order_lines.target **76/76** (tổng 25.520) ⇒ tách hạn mức theo ref
+--     là dữ liệu thật, không phải suy diễn.
+CREATE TABLE IF NOT EXISTS order_line_refs (
+  order_line_id INTEGER NOT NULL REFERENCES order_lines(id) ON DELETE CASCADE,
+  ref_no        TEXT    NOT NULL,
+  target        INTEGER NOT NULL DEFAULT 0 CHECK (target >= 0),
+  PRIMARY KEY (order_line_id, ref_no)
+);
+CREATE INDEX IF NOT EXISTS ix_olrefs_ref ON order_line_refs(ref_no);
 
 -- 5. Nhật ký sản xuất. Gắn thẳng vào DÒNG ĐƠN HÀNG ⇒ luôn có PO (không còn trường hợp NULL).
 CREATE TABLE IF NOT EXISTS production_entries (
@@ -121,7 +148,22 @@ CREATE TABLE IF NOT EXISTS production_defects (
   PRIMARY KEY (entry_id, type)
 );
 
--- 7. Container — bảng thật thay cho blob JSON container_data.data.
+-- 7. (FEAT-23) Một mục nhật ký gắn **nhiều nhất một** số hiệu nhà máy.
+--    Vì sao bảng phụ thay vì ALTER production_entries ADD COLUMN order_ref: db/index.js không có
+--    cơ chế ALTER (FEAT-21 bỏ hẳn runMigrations) nên thêm cột sẽ phải viết lại ALTER + schema guard,
+--    đúng thứ đã bị xoá vì BUG-08. Bảng phụ giữ nguyên tiền lệ FEAT-22: không đụng bảng cũ.
+--    order_line_id lặp lại (không suy ra được từ entry_id một cách rẻ) chỉ để **FK tổng hợp**
+--    chặn "gắn ref của PO khác" ở tầng DB, thay vì để JS phải nhớ kiểm.
+CREATE TABLE IF NOT EXISTS production_entry_refs (
+  entry_id      INTEGER NOT NULL REFERENCES production_entries(id) ON DELETE CASCADE,
+  order_line_id INTEGER NOT NULL,
+  ref_no        TEXT    NOT NULL,
+  PRIMARY KEY (entry_id),
+  FOREIGN KEY (order_line_id, ref_no) REFERENCES order_line_refs(order_line_id, ref_no)
+);
+CREATE INDEX IF NOT EXISTS ix_per_line_ref ON production_entry_refs(order_line_id, ref_no);
+
+-- 8. Container — bảng thật thay cho blob JSON container_data.data.
 CREATE TABLE IF NOT EXISTS containers (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   order_batch_id INTEGER NOT NULL REFERENCES order_batches(id) ON DELETE CASCADE,
@@ -131,7 +173,7 @@ CREATE TABLE IF NOT EXISTS containers (
   UNIQUE (order_batch_id, container_no)
 );
 
--- 8. Kiện (package trong file nguồn).
+-- 9. Kiện (package trong file nguồn).
 CREATE TABLE IF NOT EXISTS pallets (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   container_id INTEGER NOT NULL REFERENCES containers(id) ON DELETE CASCADE,
@@ -149,7 +191,7 @@ CREATE TABLE IF NOT EXISTS pallets (
 );
 CREATE INDEX IF NOT EXISTS ix_pallets_po ON pallets(po_id);
 
--- 9. Dòng hàng trong kiện. done LÀ CỘT.
+-- 10. Dòng hàng trong kiện. done LÀ CỘT.
 --    Kiện 1 mã hàng  ⇒ đúng 1 dòng ⇒ tick dòng = tick kiện (giống hành vi cũ).
 --    Kiện nhiều mã   ⇒ tick từng dòng (giống hành vi cũ).
 --    Không cần khoá mã hoá (bản cũ: container-no-ntk) ⇒ hết INV-P1 và hết remapPalletStatus.
@@ -163,6 +205,75 @@ CREATE TABLE IF NOT EXISTS pallet_lines (
 );
 CREATE INDEX IF NOT EXISTS ix_plines_line ON pallet_lines(order_line_id);
 `;
+
+/**
+ * Hình dạng schema mà app **bắt buộc** phải có — bảng + cột.
+ *
+ * ═══ VÌ SAO CẦN, khi đã "bỏ hết migration" (FEAT-21) thì lại thêm ═══
+ *
+ * Lỗi gặp thật trên thiết bị (2026-10-05): `no such column: order_line_id`.
+ * Nguyên nhân: file DB do **một build trung gian** tạo ra đã có đúng *tên* bảng
+ * (`order_lines`, `pos`, `production_entries`…) nhưng thiếu *cột* mà build đó chưa có.
+ * `isLegacyDb()` chỉ nhìn **tên bảng** ⇒ cho là "DB đúng schema mới" ⇒ **không** xoá ⇒
+ * `CREATE TABLE IF NOT EXISTS` thành **no-op** ⇒ `CREATE INDEX … (order_line_id)` và view
+ * nổ ngay ⇒ app không khởi động.
+ *
+ * Đây **đúng** là lớp lỗi BUG-08 (`user_version` khớp nhưng schema thật thì không). FEAT-21 loại
+ * bỏ *cơ chế* `user_version` nhưng **chưa** thay bằng kiểm *quan sát đầy đủ* — chỉ kiểm tên bảng.
+ * Bảng này là phần còn thiếu: **quan sát** cột, không tin số phiên bản (nguyên tắc FEAT-21).
+ *
+ * Nguồn: phải khớp `CREATE_TABLES_SQL` ở trên. Thêm bảng/cột mà quên khai báo ở đây thì
+ * `npm test` không bắt được — xem ca guard trong `scripts/test-schemaV2.mjs`.
+ */
+export const REQUIRED_COLUMNS = {
+  order_batches: ['id', 'status', 'finished_date', 'source_file', 'mark', 'imported_at'],
+  pos: ['id', 'order_batch_id', 'code', 'consignee', 'address', 'destination', 'invoice_no'],
+  order_lines: ['id', 'po_id', 'item_code', 'target', 'nw_kg', 'gw_kg', 'volume_cbm', 'package_count'],
+  item_refs: ['id', 'order_batch_id', 'item_code', 'ref_no'],
+  order_line_refs: ['order_line_id', 'ref_no', 'target'],
+  production_entries: ['id', 'order_line_id', 'date', 'qty', 'line', 'defect_qty'],
+  production_defects: ['entry_id', 'type'],
+  production_entry_refs: ['entry_id', 'order_line_id', 'ref_no'],
+  containers: ['id', 'order_batch_id', 'po_id', 'container_no', 'seal_no'],
+  pallets: [
+    'id', 'container_id', 'po_id', 'pallet_no', 'c_no', 'is_mixed',
+    'length_m', 'width_m', 'height_m', 'volume_cbm', 'nw_kg', 'gw_kg',
+  ],
+  pallet_lines: ['id', 'pallet_id', 'order_line_id', 'qty', 'done'],
+};
+
+/**
+ * Cột **vá được bằng `ALTER TABLE … ADD COLUMN` mà không mất dữ liệu**: nullable, hoặc `NOT NULL`
+ * **có DEFAULT hằng**. Đây là toàn bộ phần có thể tự vá an toàn.
+ *
+ * Cột `NOT NULL` **không** default (`order_line_id`, `qty`, `date`…) **không** ở đây: `ADD COLUMN`
+ * kiểu đó hỏng khi bảng đã có dòng, và mà đoán giá trị thay cho người dùng thì tệ hơn là báo lỗi
+ * rõ ⇒ xem `legacyReason()` trong `src/db/index.js` (thiếu loại này thì xoá dựng lại).
+ *
+ * Ca guard trong `scripts/test-schemaV2.mjs` §11 chốt cả hai chiều của luật này.
+ */
+export const ADDABLE_COLUMN_DECLS = {
+  'order_batches.finished_date': 'TEXT',
+  'order_batches.source_file': 'TEXT',
+  'order_batches.mark': 'TEXT',
+  'pos.consignee': 'TEXT',
+  'pos.address': 'TEXT',
+  'pos.destination': 'TEXT',
+  'pos.invoice_no': 'TEXT',
+  'order_lines.nw_kg': 'REAL',
+  'order_lines.gw_kg': 'REAL',
+  'order_lines.volume_cbm': 'REAL',
+  'order_lines.package_count': 'INTEGER',
+  'containers.seal_no': 'TEXT',
+  'pallets.c_no': 'TEXT',
+  'pallets.is_mixed': 'INTEGER NOT NULL DEFAULT 0',
+  'pallets.length_m': 'REAL',
+  'pallets.width_m': 'REAL',
+  'pallets.height_m': 'REAL',
+  'pallets.volume_cbm': 'REAL',
+  'pallets.nw_kg': 'REAL',
+  'pallets.gw_kg': 'REAL',
+};
 
 /**
  * Bật `foreign_keys` cho ĐÚNG connection này.
@@ -201,7 +312,37 @@ SELECT
   l.nw_kg, l.gw_kg, l.volume_cbm, l.package_count,
   COALESCE(e.produced, 0)  AS produced,
   COALESCE(e.defect, 0)    AS defect,
-  l.target - COALESCE(e.produced, 0) AS remaining
+  l.target - COALESCE(e.produced, 0) AS remaining,
+  -- FEAT-22: số hiệu nhà máy của **riêng PO × mã này**.
+  -- Gộp ref_no và target vào MỘT chuỗi "ref:target" rồi GROUP_CONCAT — cố ý KHÔNG tách thành 2 cột.
+  -- Lý do: GROUP_CONCAT không bảo đảm thứ tự, còn ORDER BY trong subquery là hành vi không được
+  -- tài liệu hoá của SQLite (đo thật: bản 2 subquery cho ra thứ tự KHÁC NHAU nên ghép cặp lệch,
+  -- ref sẽ mang số của ref khác). Một chuỗi thì việc ghép cặp là bản chất của dữ liệu.
+  -- ORDER BY trong subquery để thứ tự **tất định ở tầng SQL** (không phụ thuộc thứ tự quét
+  -- của SQLite), và utils/refFormat.normalizeRefs còn sắp lại lần nữa cho chắc.
+  -- NULL (không có ref) = chưa có dữ liệu nên UI ẩn theo INV-I1.
+  (SELECT GROUP_CONCAT(rd.txt)
+     FROM (SELECT r.ref_no || ':' || r.target AS txt
+             FROM order_line_refs r WHERE r.order_line_id = l.id
+            ORDER BY r.ref_no) rd) AS refs,
+  -- FEAT-23: tiến độ theo số hiệu. Một chuỗi "ref:đã_làm:kế_hoạch" cho mừng ref của dòng này.
+  -- Sản lượng gộp theo ref ở subquery con rồi mới nối; ORDER BY ref_no giống hệt cột refs ở
+  -- trên để hai chuỗi luôn cùng thứ tự (đồng thời normalizeRefProgress cũng sắp lại).
+  (SELECT GROUP_CONCAT(pr.ref_no || ':' || pr.produced || ':' || pr.target)
+     FROM (
+       SELECT lr.ref_no, lr.target,
+              COALESCE((SELECT SUM(e.qty) FROM production_entries e
+                         JOIN production_entry_refs er ON er.entry_id = e.id
+                        WHERE er.order_line_id = l.id AND er.ref_no = lr.ref_no), 0) AS produced
+       FROM order_line_refs lr WHERE lr.order_line_id = l.id
+       ORDER BY lr.ref_no
+     ) pr) AS ref_progress,
+  -- Sản lượng của nhật ký **không** gắn số hiệu. Không gán tự ý vào ref nào và không hiện 0 giả
+  -- (AC-RF-08): người dùng phải thấy phần chưa phân bổ để biết còn dở đâu.
+  (SELECT COALESCE(SUM(e.qty), 0) FROM production_entries e
+     WHERE e.order_line_id = l.id
+       AND NOT EXISTS (SELECT 1 FROM production_entry_refs er WHERE er.entry_id = e.id)
+  ) AS unattributed_produced
 FROM order_lines l
 JOIN pos p ON p.id = l.po_id
 LEFT JOIN (

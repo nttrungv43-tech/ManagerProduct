@@ -383,6 +383,121 @@ Nguồn `shipments[].item_summary[]` có 4 trường mà định dạng phẳng 
 
 ---
 
+## §5.9 Số hiệu nhà máy (`order_ref`) theo **PO × mã** (FEAT-22)
+
+> Chi tiết: [`features/FEAT-22-order-ref-per-po.md`](features/FEAT-22-order-ref-per-po.md).
+> §5.1 và §5.8 mô tả schema **cũ** (FEAT-21 đã viết lại `src/db/schema.js` sang 9 bảng quan hệ mà
+> chưa cập nhật lại file spec này). Mục này theo schema **hiện hành**.
+
+### §5.9.1 Vấn đề: `item_refs` không biết ref nào của PO nào
+
+`order_ref` (`packages[].items[].order_ref`) **không thuộc mã hàng** mà thuộc **cặp (PO × mã)**.
+Đo trên `src/data/Dmac.json`:
+
+| Đơn vị | Số |
+|---|---|
+| `(item_code, ref_no)` — khoá của `item_refs` | **55** |
+| `(po, item_code, ref_no)` — khoá đúng cho một thẻ | **82** |
+
+15 cặp `(mã, ref)` dùng ở **nhiều PO** (`1072017GF / D580279` ở 6 PO). Nên đọc `item_refs` theo mã sẽ
+gắn ref của PO khác vào thẻ: **7/76 thẻ sai**.
+
+### §5.9.2 Schema
+
+```sql
+CREATE TABLE IF NOT EXISTS order_line_refs (
+  order_line_id INTEGER NOT NULL REFERENCES order_lines(id) ON DELETE CASCADE,
+  ref_no        TEXT    NOT NULL,
+  target        INTEGER NOT NULL DEFAULT 0 CHECK (target >= 0),
+  PRIMARY KEY (order_line_id, ref_no)
+);
+CREATE INDEX IF NOT EXISTS ix_olrefs_ref ON order_line_refs(ref_no);
+```
+
+`SCHEMA_VERSION` 1 → 2. **Không** `ALTER`/`DROP` bảng nào ⇒ `db/index.js` **không** cần cơ chế
+`ALTER` (FEAT-21 đã bỏ hẳn `runMigrations`). `CREATE TABLE IF NOT EXISTS` chạy ở **mọi** lần mở app
+nên DB đã có dữ liệu nhận tay sẽ có bảng mới mà **không mất gì**.
+
+`item_refs` **giữ nguyên** (55 dòng) — nó vẫn trả lời "mã này có mấy số hiệu" ở tầng mã, chỉ **không
+dùng để hiển thị thẻ**.
+
+### §5.9.3 Quy tắc
+
+| ID | Quy tắc |
+|---|---|
+| **INV-R1** | `Σ target` của mọi ref của một dòng đơn hàng **bằng** `order_lines.target` của dòng đó. Đo trên `Dmac.json`: khớp **76/76**, tổng **25.520** ⇒ tách hạn mức theo ref là dữ liệu thật |
+| **INV-R2** | `target` của ref = tổng `qty` của các kiện mang ref đó (`packages[].items[].qty`), **không** chia đều |
+| **INV-R3** | Số hiệu là **chỉ đọc** (cùng `INV-I2`): `addItem`/`updateItem`/`ItemEditSheet` không sửa |
+| **INV-R4** | Không có ref ⇒ view trả `NULL` ⇒ UI **ẩn** (cùng `INV-I1`). DB cũ chưa nhập lại file nguồn rơi vào trường hợp này — **không** bịa ref |
+
+### §5.9.4 Cột `refs` của view `v_line_progress`
+
+Gộp `ref_no` và `target` vào **một** chuỗi `"ref:target"` rồi `GROUP_CONCAT`:
+
+```sql
+(SELECT GROUP_CONCAT(r.ref_no || ':' || r.target) FROM order_line_refs r
+   WHERE r.order_line_id = l.id) AS refs
+```
+
+> **Vì sao MỘT chuỗi chứ không phải hai cột `ref_nos` + `ref_targets`:** `GROUP_CONCAT` không bảo đảm
+> thứ tự, mà `ORDER BY` trong subquery là hành vi **không được tài liệu hoá** của SQLite. Đo thật:
+> bản hai subquery cho ra thứ tự **khác nhau** ⇒ `zip` cặp lệch ⇒ ref mang số của ref khác. Gộp một
+> chuỗi thì việc ghép cặp là **bản chất của dữ liệu**. Sắp xếp lại ở JS (`utils/refFormat.normalizeRefs`)
+> nên tầng SQL không cần bảo đảm thứ tự.
+
+> **FEAT-23 đã bổ sung `ORDER BY`** trong subquery để thứ tự **tất định ở tầng SQL** (đo trên
+> `node:sqlite` 3.47.2 là ổn định), và `normalizeRefs`/`normalizeRefProgress` **vẫn** sắp lại lần
+> nữa cho chắc — không phụ thuộc hành vi của SQLite.
+
+---
+
+## §5.10 Nhật ký sản xuất gắn **theo số hiệu** (FEAT-23)
+
+> Chi tiết: [`features/FEAT-23-entry-qty-by-ref.md`](features/FEAT-23-entry-qty-by-ref.md).
+> Nối tiếp §5.9: `order_line_refs` cho biết **kế hoạch** từng ref; mục này lưu **đã làm** từng ref.
+
+### §5.10.1 Schema
+
+```sql
+CREATE TABLE IF NOT EXISTS production_entry_refs (
+  entry_id      INTEGER NOT NULL REFERENCES production_entries(id) ON DELETE CASCADE,
+  order_line_id INTEGER NOT NULL,
+  ref_no        TEXT    NOT NULL,
+  FOREIGN KEY (order_line_id, ref_no) REFERENCES order_line_refs(order_line_id, ref_no),
+  PRIMARY KEY (entry_id)
+);
+CREATE INDEX IF NOT EXISTS ix_per_line_ref ON production_entry_refs(order_line_id, ref_no);
+```
+
+`SCHEMA_VERSION` 2 → 3. **Không** `ALTER` bảng nào (cùng lý do §5.9.2).
+
+**Vì sao `order_line_id` lặp lại** (suy ra được từ `entry_id` nếu tra 1 bước): để **FK tổng hợp**
+`(order_line_id, ref_no)` chặn "gắn nhầm ref của PO khác" **ở tầng DB**, thay vì để JS phải nhớ
+kiểm. `order_line_refs` có PK `(order_line_id, ref_no)` nên FK này tham chiếu được (SQLite yêu cầu
+cột đích có unique index, PK là unique index).
+
+### §5.10.2 Quy tắc
+
+| ID | Quy tắc |
+|---|---|
+| **INV-R5** | Với mọi `(order_line_id, ref_no)`: `Σ qty` của các nhật ký gắn ref đó **≤** `order_line_refs.target`. Kiểm ở `queries.js` (`checkRefTarget`), **không** chỉ ở UI — cùng cách `INV-V1` |
+| **INV-R6** | `Σ qty` của mọi ref của một dòng đơn hàng **≤** `order_lines.target` của dòng đó. Hệ quả của `INV-R1` + `INV-R5` |
+| **INV-R7** | Một mục nhật ký gắn **nhiều nhất một** ref (`PRIMARY KEY (entry_id)`). Nhật ký **không** gắn ref là hợp lệ (không có dòng trong bảng phụ) |
+| **INV-R8** | `Σ` mọi nhật ký (có ref hay không) **vẫn** là `produced` của thẻ cha. FEAT-23 **không** tạo số liệu song song — chỉ **gắn nhãn** cho những số đã có |
+
+### §5.10.3 Cột `ref_progress` + `unattributed_produced` của view `v_line_progress`
+
+`ref_progress` gộp `"ref:đã_làm:kế_hoạch"` vào **một** chuỗi (cùng lý do §5.9.4);
+`unattributed_produced` = `Σ qty` của các nhật ký **không** gắn ref của dòng đó.
+
+> **Vì sao cần `unattributed_produced`:** nếu chỉ hiện tổng các ref thì `Σ` sẽ lệch với `Đã làm` ở
+> thẻ cha mà **không có lý do**. Không gán tự ý nhật ký không ref vào ref nào, và không hiện `0` giả
+> (`AC-RF-08`).
+>
+> Cột này là `0` (không phải `NULL`) khi không có nhật ký nào chưa gắn ref, để UI chỉ cần so `> 0`.
+
+---
+
 ## §10.1 Phân cấp thay đổi
 
 | Cấp | Loại | Ví dụ | Yêu cầu |

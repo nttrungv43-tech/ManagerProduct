@@ -280,3 +280,73 @@
 > **Sửa `INV-B2`** (`SPEC-rules.md`): dữ liệu `archived` **vẫn cấm sửa**, được phép **xoá hẳn có kiểm soát**. Thay đổi Cấp 3.
 > **Không có trạng thái "đơn đã ẩn"** (chủ dự án chọn *chỉ xoá hẳn*) ⇒ **không thêm cột, không migration**.
 > Chi tiết: [`features/FEAT-15-delete-hide-archive.md`](features/FEAT-15-delete-hide-archive.md).
+
+### §7.7 FEAT-23 §sort — danh sách PO & container tăng dần
+
+| ID | Trạng thái | Mô tả |
+|---|---|---|
+| AC-SORT-01 | ✅ | Tab **Mã hàng** — bảng `Tổng theo PO` hiển thị **tăng dần** theo số PO (`2919 < 2920 < 2929`) — xem `poRows` (`src/db/queries.js` `ORDER BY po... ` → thực tế sort ở store/queries theo số) |
+| AC-SORT-02 | ✅ | Tab **Container** — chip **Tất cả PO** liệt kê PO **tăng dần theo số** (`ContainersScreen`) |
+| AC-SORT-03 | ✅ | Tab **Container** — danh sách container và kiện trong container **tăng dần** theo số/ứ tự tạo |
+
+---
+
+## §7.8 FEAT-22 — Số hiệu nhà máy (`order_ref`) theo PO × mã
+
+> Chỉ đạo chủ dự án 2026-10-05: *"ẩn các dữ liệu KL, TKL, Thể tích, hãy hiển thị dữ liệu
+> `order_ref`"*. Chi tiết: [`features/FEAT-22-order-ref-per-po.md`](features/FEAT-22-order-ref-per-po.md).
+
+| ID | Trạng thái | Mô tả |
+|---|---|---|
+| AC-REF-01 | ✅ | Nhập `Dmac.json` ⇒ **82** dòng `order_line_refs`; `Σ target` = **25.520** = `Σ order_lines.target` |
+| AC-REF-02 | ✅ | Thẻ `PO 2919 / 106385GF` hiện **chỉ** `D980159` — **không** lẫn `D980077` (của PO 2921) |
+| AC-REF-03 | ✅ | Thẻ `PO 2921 / 106385GF` hiện **chỉ** `D980077` |
+| AC-REF-04 | ✅ | Mã nhiều ref trong **cùng** PO (`PO 2919 / 1063048GF`) ⇒ `D980470: 477`, `D980973: 159`, `D980781: 80` — tổng đúng `716` |
+| AC-REF-05 | ✅ | Mã **không có ref** (thêm tay, hoặc DB cũ chưa nhập lại file nguồn) ⇒ **ẩn** dòng số hiệu, không hiện `0`/`—` (`INV-I1`) |
+| AC-REF-06 | ✅ | Mọi thẻ **không còn** `KL` / `TKL` / `Thể tích`; **vẫn còn** `Kiện` |
+| AC-REF-07 | ✅ | `nw_kg`/`gw_kg`/`volume_cbm` trong DB **còn nguyên** — chỉ ẩn ở UI (`INV-I2`) |
+| AC-REF-08 | ✅ | DB đã có dữ liệu nhập tay (chưa có bảng `order_line_refs`) ⇒ bảng được tạo, app khởi động bình thường, **không mất dữ liệu** |
+| AC-REF-09 | ✅ | Nhập lại lần 2 cùng file ⇒ `order_line_refs` **không nhân bản** (vẫn 82 dòng) |
+| AC-REF-10 | ✅ | Từng dòng: `Σ target` các ref **bằng** `order_lines.target` của dòng đó (`INV-R1`) — lệch **0** dòng |
+| AC-REF-11 | ✅ | 1 ref ⇒ `Số hiệu`; nhiều ref ⇒ `Số hiệu (N)` + từng dòng `ref — N pcs` |
+| AC-REF-12 | ✅ | `Σ target` ref **không bao giờ vượt** `Σ order_lines.target` của cùng batch |
+
+> **Sửa `AC-SPLIT-06`:** AC này thuộc bản cũ (mỗi thẻ tách chỉ hiện 4 trường ở thẻ đầu). FEAT-21 đã bỏ
+> cơ chế tách thẻ; FEAT-22 ẩn 3 trong 4 trường. Không còn "thẻ tách đầu/sau".
+>
+> **Không có breaking change:** `order_lines.target` **không đổi** ⇒ `INV-D6`/`INV-D7`/`INV-V1` giữ
+> nguyên; `item_refs` giữ nguyên 55 dòng; `production_entries` **không đụng**; không sửa chữ ký hàm nào
+> (`fetchItemsWithStats` chỉ **thêm** khoá `refs`).
+
+### 7.10 FEAT-23 — Nhập số lượng **theo từng số hiệu**
+
+> Chi tiết: [`features/FEAT-23-entry-qty-by-ref.md`](features/FEAT-23-entry-qty-by-ref.md).
+> Mã ⚠️ = **đã triển khai + test tự động đạt**, nhưng **RC chưa chạy tay trên máy thật**.
+
+| ID | Trạng thái | Mô tả |
+|---|---|---|
+| AC-RF-01 | ⚠️ | Thẻ 3 ref ⇒ **3** dòng tiến độ, mỗi dòng có `Đã làm N/target` và `Còn lại` |
+| AC-RF-02 | ⚠️ | Ref `D980470` đã nhập 300, nhập thêm 200 ⇒ `Alert` chặn vượt hạn mức **của ref**; `Đã làm` ref **không đổi**; ô nhập **còn nguyên** |
+| AC-RF-03 | ⚠️ | Nhập vào ref khác vẫn **cho phép** — hạn mức tính theo từng ref, không chặn nhầm |
+| AC-RF-04 | ⚠️ | Nhập 200 + 100 + 50 vào 3 ref ⇒ `Đã làm` thẻ cha = **350** (tự cộng từ nhật ký) |
+| AC-RF-05 | ⚠️ | `Σ` sản lượng **bằng** `Σ qty` nhật ký — không cộng trùng |
+| AC-RF-06 | ⚠️ | Nhật ký gắn ref hiện `· D980470` trong danh sách nhật ký |
+| AC-RF-07 | ⚠️ | Nhật ký **không** gắn ref ghi rõ *"chưa gắn số hiệu"* — không bịa ref |
+| AC-RF-08 | ⚠️ | Có nhật ký không gắn ref ⇒ hiện *"chưa gắn số hiệu: N pcs"*, không im lặng làm `Σ` lệch |
+| AC-RF-09 | ⚠️ | Ref không có dữ liệu (`target = 0`) ⇒ dòng đó **ẩn** (`INV-I1`) |
+| AC-RF-10 | ⚠️ | Thẻ **không có** ref ⇒ **không** có khối nhập theo số hiệu; nhập qua form gốc như cũ |
+| AC-RF-11 | ⚠️ | Sửa `target` của mã ⇒ `Σ target` các ref **không đổi** (ref chỉ đọc) |
+| AC-RF-12 | ⚠️ | Sửa qty nhật ký gắn ref ⇒ hạn mức ref tính **trừ** dòng đang sửa (300→400 khi đã 300/477 thì cho phép) |
+| AC-RF-13 | ⚠️ | `Σ` các ref ≤ tổng kế hoạch của thẻ; vượt tổng thì `queries.js` chặn (`INV-V1` **không** nới) |
+| AC-RF-14 | ⚠️ | Xoá nhật ký gắn ref ⇒ dòng gắn ref đi theo (`ON DELETE CASCADE`), không còn mồ côi |
+| AC-RF-15 | ⚠️ | `Σ qty` mọi nhật ký (có ref hay không) **vẫn bằng** `Σ v_line_progress.produced` — số không đổi so với trước FEAT-23 |
+
+> **Không có breaking change:** `order_lines.target` **không đổi**, thẻ con **không** phải
+> `order_lines` ⇒ `INV-D6`/`INV-D7` không đụng; chỉ **thêm** tham số tuỳ chọn `refNo` vào
+> `addEntry`/`updateEntry` (quy tắc vàng #3); `store/useAppStore.js` 🔒 **không sửa**.
+>
+> ⚠️ **Lỗi có sẵn phát hiện khi triển khai (`BUG-N1`), CHƯA sửa:** `checkLineTarget` gọi
+> `checkQtyLimit` theo **vị trí** trong khi hàm nhận **object** ⇒ `incomingQty` luôn `0` và
+> `hasLimit` luôn rỗng ⇒ **`INV-V1` không được kiểm ở tầng DB** (chỉ còn UI tự cản). Sửa là thay
+> đổi hành vi Cấp 3 (người đang nhập vượt hạn mức sẽ bị chặn lại) ⇒ cần chủ dự án duyệt riêng.
+> `checkRefTarget` mới **không** nhân bản lỗi này. Xem `FEAT-23` §8.1.

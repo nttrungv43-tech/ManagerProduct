@@ -16,6 +16,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCENARIOS = [
   'reset-legacy',     // FEAT-21 — DB cũ: phải closeAsync() rồi mới xoá được
   'reset-not-needed', // FEAT-21 — DB đã đúng schema mới: KHÔNG xoá (giữ dữ liệu nhập tay)
+  'intermediate-build',    // BUGFIX-23 — DB của build trung gian thiếu `order_line_id`
+  'missing-nullable-column', // BUGFIX-23 — thiếu cột nullable ⇒ vá, KHÔNG xoá
+  'verify-reports-missing',  // BUGFIX-23 — vá hỏng ⇒ phải nêu tên bảng + cột
 ];
 
 /**

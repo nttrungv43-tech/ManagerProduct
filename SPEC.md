@@ -62,12 +62,19 @@ Xem đầy đủ trong [`SPEC-reference.md`](SPEC-reference.md) §12:
 | BUG-01/04/05 | ✅ Đã sửa (PK pallet, defectTypes, dataVersion) |
 | BUG-07 | ✅ Đã sửa (Nhập JSON: `readAsStringAsync` đã bị xoá → dùng `new File(uri).text()`) |
 | BUG-08 | ✅ Đã sửa (app không khởi động: `getDb()` trả DB chưa migrate → `no such column: nw_kg`) |
+| BUGFIX-23 | ✅ Đã sửa (app không khởi động: DB của **build trung gian** thiếu cột → `no such column: order_line_id`) |
 | FEAT-16 | ✅ Converter `packing_data.json` → file app import được (`npm run convert:packing`) + báo lỗi rõ khi sai định dạng |
 | FEAT-17 | ✅ Nhập thẳng `packing_data.json` + hiển thị KL/TKL/thể tích/số kiện theo mỗi mã (migration v3, không breaking) |
 | FEAT-18 | ✅ Số lượng **riêng cho từng PO** kể cả mã dùng chung (`item_po`, migration v4, không breaking) |
 | FEAT-19 | ✅ Tách mã nhiều PO thành từng thẻ riêng (`106167GF` → PO 2922 + PO 2923), không gộp `A+B` (không migration) |
 | FEAT-20 | ✅ **Đã sản xuất / Còn lại theo từng PO** trong bảng "Tổng theo PO" (`entries.po`, migration v5, không breaking) |
+| FEAT-22 | ✅ Số hiệu nhà máy `order_ref` theo **PO × mã** (bảng `order_line_refs`) + ẩn `KL`/`TKL`/`Thể tích`, giữ `Kiện` |
+| FEAT-23 | ✅ Nhập số lượng **theo từng `order_ref`** (bảng `production_entry_refs`), phương án A — thẻ cha giữ nguyên, ref là dòng con |
 | FEAT-02..07 | 📋 Backlog |
+
+> ⚠️ **`BUG-N1` chờ chủ dự án quyết định:** `checkLineTarget` gọi `checkQtyLimit` sai kiểu (theo vị
+> trí, hàm nhận object) ⇒ `INV-V1` **không được kiểm ở tầng DB**, chỉ còn UI tự cản. Sửa là thay đổi
+> hành vi Cấp 3. Chi tiết: [`FEAT-23`](specs/features/FEAT-23-entry-qty-by-ref.md) §8.1.
 
 > **Lưu ý khi nhập JSON:** app nhập được **3** định dạng — `entries` (nhật ký sản xuất), packing list phẳng
 > (`總表` + `Column1..Column10`) và **`packing_data.json`** (`schema_version: 1`, FEAT-17).

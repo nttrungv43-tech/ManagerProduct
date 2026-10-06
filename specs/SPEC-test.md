@@ -106,6 +106,35 @@
 | RC-131 | *(FEAT-19)* DB cũ **chưa** nhập lại file nguồn | Thẻ gộp `PO 2922+2923` **vẫn còn** kèm ghi chú *"Chưa tách được theo PO — nhập lại file nguồn…"*; **không** mất dữ liệu, mọi thao tác cũ vẫn chạy _(máy thật)_ |
 | RC-117 | *(FEAT-17)* Mở app trên DB cũ (`user_version = 2`) | v3 chạy; dữ liệu cũ nguyên vẹn; 4 cột mới `NULL` _(máy thật)_ |
 | RC-106 | *(BUGFIX-07)* Nhập file JSON hợp lệ / file sai cú pháp / file rỗng | `Alert` xác nhận với **đúng số lượng** như trước; file lỗi ⇒ báo tiếng Việt, không crash, **không** ghi gì vào DB (AC-FS-04/05) |
+| RC-140 | *(FEAT-22)* Mở app sau khi nâng cấp từ DB đã có dữ liệu nhập tay | App vào được màn hình chính; bảng `order_line_refs` tồn tại; **không mất** dữ liệu cũ (AC-REF-08) _(máy thật)_ |
+| RC-141 | *(FEAT-22)* Nhập `Dmac.json` → thẻ `PO 2919 / 106385GF` | Hiện **chỉ** `D980159`, **không** lẫn `D980077` của PO 2921 (AC-REF-02) _(máy thật)_ |
+| RC-142 | *(FEAT-22)* Thẻ `PO 2921 / 106385GF` | Chỉ `D980077` (AC-REF-03) _(máy thật)_ |
+| RC-143 | *(FEAT-22)* Thẻ `PO 2919 / 1063048GF` | 3 ref kèm `477` / `159` / `80`, tổng `716` (AC-REF-04) _(máy thật)_ |
+| RC-144 | *(FEAT-22)* Nhìn thẻ bất kỳ | Không còn `KL` / `TKL` / `Thể tích`; **vẫn còn** `Kiện` (AC-REF-06) _(máy thật)_ |
+| RC-145 | *(FEAT-22)* Mã thêm tay (`＋ Thêm mã hàng`) | Không có dòng số hiệu — ẩn, không hiện `0` (AC-REF-05) _(máy thật)_ |
+| RC-146 | *(FEAT-22)* Nhập lại cùng file lần 2 | Vẫn **82** dòng ref, không nhân bản (AC-REF-09) _(máy thật)_ |
+| RC-147 | *(FEAT-22)* `SELECT COUNT(*), SUM(target) FROM order_line_refs` | `82` · `25520` (AC-REF-01) _(máy thật)_ |
+| RC-148 | *(FEAT-22)* Nhập / sửa / xoá nhật ký như bình thường | Hạn mức `SUM ≤ target` như cũ, không lỗi (`INV-V1`) _(máy thật)_ |
+| RC-150 | *(FEAT-23)* Mở thẻ `PO 2919 / 1063048GF` | 3 dòng tiến độ `0/477`, `0/159`, `0/80` (AC-RF-01) _(máy thật)_ |
+| RC-151 | *(FEAT-23)* Nhập `300` vào `D980470` | `Đã làm` ref = `300/477`, còn `177`; thẻ cha `Đã làm 300` (AC-RF-04) _(máy thật)_ |
+| RC-152 | *(FEAT-23)* Nhập `200` vào `D980470` | `Alert` chặn vượt; ref vẫn `300`; **ô nhập còn nguyên** `200` (AC-RF-02) _(máy thật)_ |
+| RC-153 | *(FEAT-23)* Nhập `159` vào `D980973` | Cho phép — đúng bằng hạn mức ref (AC-RF-03) _(máy thật)_ |
+| RC-154 | *(FEAT-23)* Nhập `1` vào `D980973` sau khi đã `159` | Chặn (hạn mức ref = 0 còn lại) (AC-RF-02) _(máy thật)_ |
+| RC-155 | *(FEAT-23)* Mở danh sách nhật ký | Dòng gắn ref hiện `· D980470`; dòng nhập bằng form gốc hiện *"chưa gắn số hiệu"* (AC-RF-06/07) _(máy thật)_ |
+| RC-156 | *(FEAT-23)* Nhập bằng form gốc rồi nhìn thẻ | Dòng *"chưa gắn số hiệu: N pcs"* (AC-RF-08) _(máy thật)_ |
+| RC-157 | *(FEAT-23)* Sửa nhật ký gắn ref `300` → `400` | Cho phép (400 ≤ 477), cảnh báo xác nhận (AC-RF-12) _(máy thật)_ |
+| RC-158 | *(FEAT-23)* Xoá nhật ký gắn ref | Ref về `0`; không còn dòng mồ côi (AC-RF-14) _(máy thật)_ |
+| RC-159 | *(FEAT-23)* Thẻ **không có** ref (mã thêm tay) | Không có khối nhập theo số hiệu; nhập bình thường (AC-RF-10) _(máy thật)_ |
+| RC-160 | *(FEAT-23)* Nhập tới mức tổng kế hoạch của thẻ | Cho phép tới đúng tổng; vượt tổng thì `queries.js` chặn (AC-RF-13) _(máy thật)_ |
+| RC-161 | *(FEAT-23)* Tắt app, mở lại | Mọi nhật ký gắn ref còn nguyên; `Σ` không đổi (AC-RF-15) _(máy thật)_ |
+| RC-162 | *(FEAT-23)* Hoàn tất đơn → tab Lịch sử | Tổng nhóm ngày **không đổi** so với trước FEAT-23 (AC-RF-15) _(máy thật)_ |
+| RC-163 | *(FEAT-23)* Nhập `12.345` vào ref có kế hoạch `100` | `Đã làm 12,35/100 · Còn lại 87,65` — cộng lại đúng `100` (BUG-N2) _(máy thật)_ |
+| RC-164 | *(FEAT-23)* Một ref có `12.345` pcs, ref khác `5.678` | Hai dòng tiến độ **cùng thứ tự** với khối "Số hiệu" phía trên _(máy thật)_ |
+
+**Đã test tự động cho FEAT-23:** `test-refFormat.mjs` 50 → **67 ca** (17 ca mới) ·
+`test-schemaV2.mjs` 57 → **94 ca** (3 khối mới: `production_entry_refs` + hạn mức, bất biến tổng thể
+trên DB sạch, guard backtick). Hạn mức tầng DB kiểm bằng cách gọi `checkQtyLimit` **thật** — không
+đối chiếu bằng phép tính viết tay.
 
 ---
 

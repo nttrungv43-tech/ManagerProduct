@@ -19,7 +19,7 @@ npx expo lint               # lint
 npx tsc --noEmit            # typecheck
 npx expo-doctor             # diagnose dependency and config issues
 npx expo install --fix      # fix incompatible package versions
-npm test                    # 13 script unit + 7 kịch bản E2E / 825 ca: unit test hàm thuần (utils/validateQty.js, utils/palletKey.js, utils/deleteItem.js, utils/poSummary.js, utils/itemRows.js, utils/deleteItemsByPo.js, utils/date.js, utils/archiveDelete.js, utils/packingV1.js, utils/importFormat.js, utils/packingV1Import.js, utils/schemaColumns.js) + schema mới trên SQLite thật (scripts/test-schemaV2.mjs) + 2 kịch bản E2E khởi tạo DB (scripts/test-dbInit.mjs), không cần Expo/máy thật
+npm test                    # 14 script unit + 5 kịch bản E2E / 539 ca: unit test hàm thuần (utils/validateQty.js, utils/palletKey.js, utils/deleteItem.js, utils/poSummary.js, utils/itemRows.js, utils/deleteItemsByPo.js, utils/date.js, utils/archiveDelete.js, utils/packingV1.js, utils/importFormat.js, utils/packingV1Import.js, utils/schemaColumns.js, utils/refFormat.js) + schema mới trên SQLite thật (scripts/test-schemaV2.mjs) + 5 kịch bản E2E khởi tạo DB (scripts/test-dbInit.mjs), không cần Expo/máy thật
 npm run test:pallet         # chỉ test khoá pallet / remap trạng thái tick (FEAT-10)
 npm run test:deletePo       # chỉ test xoá hàng loạt theo PO (FEAT-13)
 npm run test:date           # chỉ test ngày cục bộ (BUG-02)
@@ -31,7 +31,8 @@ npm run test:schema         # chỉ test cột migration idempotent / an toàn t
 npm run test:migrations     # ⚠️ TẠM GỎ (FEAT-21 pha 6): test chuỗi migration cũ, đã bị bỏ hẳn. Đã gỡ khỏi `npm test`
 npm run test:schemaV2       # schema mới (9 bảng + 2 view) trên SQLite thật + Dmac.json thật — 39 ca (FEAT-21)
 npm run test:itemRows       # chỉ test tách dòng mã nhiều PO + bộ lọc (FEAT-19)
-npm run test:dbInit         # E2E tầng khởi tạo DB: chạy src/db/index.js nguyên bản với expo-sqlite giả (BUGFIX-08)
+npm run test:refFormat     # chỉ test hiển thị số hiệu `order_ref` + tiến độ/nhập theo số hiệu (FEAT-22, FEAT-23)
+npm run test:dbInit         # E2E tầng khởi tạo DB: 5 kịch bản chạy src/db/index.js nguyên bản với expo-sqlite giả (BUGFIX-08, BUGFIX-23)
 npm run convert:packing      # packing_data.json → src/data/packing_legacy/packing_legacy.json (file ĐỂ IMPORT VÀO APP)
 ```
 
@@ -39,6 +40,12 @@ Run lint and typecheck before declaring any task done.
 
 > Lỗi `Parse errors in imported module '@/db/queries'` ở file **không** sửa ⇒ cache ESLint bị bẩn
 > (`expo lint` dùng `--cache` trong `.expo/cache/eslint/`). Chạy `rm -rf .expo/cache/eslint` rồi lint lại.
+
+> **Không viết ký tự backtick trong ghi chú SQL nằm bên trong template literal** (`CREATE_TABLES_SQL`,
+> `CREATE_VIEWS_SQL` ở `src/db/schema.js`, và `db.getAllAsync(\`SELECT …\`)` ở `src/db/queries.js`).
+> Backtick sẽ **khoá sớm** chuỗi, phần còn lại biến thành JS ⇒ `expo lint`/`tsc` báo lỗi ở file
+> **không liên quan** (`ItemCard.js`, `HistoryScreen.js`, `useAppStore.js`). Đã có ca guard quét việc
+> này trong `scripts/test-schemaV2.mjs`.
 
 ## Navigation & Routing
 

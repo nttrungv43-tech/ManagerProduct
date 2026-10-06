@@ -67,6 +67,13 @@ function applyPlan(d, p, importedAt = '2026-10-04') {
   const insRef = d.prepare(`INSERT OR IGNORE INTO item_refs (order_batch_id, item_code, ref_no) VALUES (?, ?, ?)`);
   for (const r of p.refs) insRef.run(batchId, r.itemCode, r.refNo);
 
+  const insLineRef = d.prepare(`INSERT OR IGNORE INTO order_line_refs (order_line_id, ref_no, target) VALUES (?, ?, ?)`);
+  for (const lr of p.lineRefs) {
+    const li = p.lines.findIndex(l => l.poIdx === lr.poIdx && l.itemCode === lr.itemCode);
+    if (li < 0) continue;
+    insLineRef.run(lineIds[li], lr.refNo, lr.target);
+  }
+
   const insCt = d.prepare(`INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`);
   const containerIds = p.containers.map(c =>
     Number(insCt.run(batchId, posIds[c.poIdx], c.containerNo, c.sealNo).lastInsertRowid));
@@ -270,6 +277,366 @@ console.log('6) `pallet_lines.done` thay cho bảng khoá mã hoá (hết INV-P1
     const cols = db.prepare(`PRAGMA table_info(pallet_lines)`).all().map(c => c.name);
     return cols.includes('done') && !cols.some(c => /key/i.test(c));
   })());
+}
+
+// ══════════════════════════════════════════════════════════════════════
+console.log('7) `order_line_refs` — số hiệu gắn với PO × mã, KHÔNG phải chỉ mã (FEAT-22)');
+// ══════════════════════════════════════════════════════════════════════
+{
+  const db = freshDb();
+  applyPlan(db, plan);
+
+  eq('82 dòng (PO × mã × ref) — nhiều hơn 55 của item_refs',
+    one(db, 'SELECT COUNT(*) c FROM order_line_refs').c, 82);
+  eq('55 dòng item_refs vẫn còn nguyên (không xoá, không đổi)',
+    one(db, 'SELECT COUNT(*) c FROM item_refs').c, 55);
+
+  // AC-REF-01: tổng target của mọi ref bằng tổng kế hoạch cả đơn.
+  eq(`Σ target của order_line_refs = 25520 (= Σ order_lines.target)`,
+    one(db, 'SELECT SUM(target) t FROM order_line_refs').t, 25520);
+
+  // AC-REF-10: từng dòng, Σ target theo ref == order_lines.target của dòng đó.
+  const mismatch = all(db, `
+    SELECT l.id, l.target,
+           (SELECT COALESCE(SUM(r.target),0) FROM order_line_refs r WHERE r.order_line_id = l.id) AS ref_sum
+    FROM order_lines l
+    WHERE l.target <> (SELECT COALESCE(SUM(r.target),0) FROM order_line_refs r WHERE r.order_line_id = l.id)`);
+  eq('KHÔNG dòng nào lệch giữa target của dòng và tổng target các ref', mismatch.length, 0);
+
+  // AC-REF-02/03: 7 thẻ từng sai nếu đọc ref theo mã. Chốt lại từng thẻ bằng chính view.
+  const refsOf = (po, code) => String(
+    one(db, `SELECT refs FROM v_line_progress WHERE po=? AND item_code=?`, po, code)?.refs ?? ''
+  ).split(',').filter(Boolean).map(s => s.slice(0, s.lastIndexOf(':')));
+  eq('PO 2919 / 106385GF chỉ có D980159 (không lẫn D980077 của PO 2921)',
+    refsOf('2919', '106385GF'), ['D980159']);
+  eq('PO 2921 / 106385GF chỉ có D980077', refsOf('2921', '106385GF'), ['D980077']);
+  eq('PO 2924 / 1072014GF chỉ có D580422', refsOf('2924', '1072014GF'), ['D580422']);
+  eq('PO 2926 / 1072014GF chỉ có D581032', refsOf('2926', '1072014GF'), ['D581032']);
+  eq('PO 2927 / 106263GF chỉ có D980294', refsOf('2927', '106263GF'), ['D980294']);
+  eq('PO 2929 / 1072014GF chỉ có D580422', refsOf('2929', '1072014GF'), ['D580422']);
+
+  // View gộp `ref:target` thành MỘT chuỗi — mỗi ref mang số của chính nó, không lệch theo thứ tự.
+  eq('view trả "ref:target" (mỗi ref mang số của chính nó)',
+    one(db, `SELECT refs FROM v_line_progress WHERE po='2919' AND item_code='1063048GF'`).refs
+      .split(',').sort(), ['D980470:477', 'D980781:80', 'D980973:159']);
+
+  // AC-REF-04: 4 mã có nhiều ref trong CÙNG một PO.
+  eq('PO 2919 / 1063048GF có 3 ref, tổng 716 (= target)',
+    all(db, `SELECT r.ref_no, r.target FROM order_line_refs r
+             JOIN order_lines l ON l.id = r.order_line_id JOIN pos p ON p.id = l.po_id
+             WHERE p.code='2919' AND l.item_code='1063048GF' ORDER BY r.ref_no`)
+      .map(r => `${r.ref_no}:${r.target}`), ['D980470:477', 'D980781:80', 'D980973:159']);
+  eq('PO 2920 / 1072014GF có 2 ref, tổng 214 (= target)',
+    one(db, `SELECT COUNT(*) c, SUM(r.target) t FROM order_line_refs r
+             JOIN order_lines l ON l.id = r.order_line_id JOIN pos p ON p.id = l.po_id
+             WHERE p.code='2920' AND l.item_code='1072014GF'`).c === 2
+    && one(db, `SELECT SUM(r.target) t FROM order_line_refs r
+             JOIN order_lines l ON l.id = r.order_line_id JOIN pos p ON p.id = l.po_id
+             WHERE p.code='2920' AND l.item_code='1072014GF'`).t === 214, true);
+
+  // AC-REF-05: dòng đơn hàng không có kiện ⇒ không có ref ⇒ view trả NULL (UI ẩn theo INV-I1).
+  const insPo = db.prepare(`INSERT INTO pos (order_batch_id, code) VALUES (1, 'TEST-PO')`);
+  const poId = Number(insPo.run().lastInsertRowid);
+  const bare = Number(db.prepare(
+    `INSERT INTO order_lines (po_id, item_code, target) VALUES (?, 'MANUAL-001', 500)`).run(poId).lastInsertRowid);
+  const bareRow = one(db, 'SELECT refs FROM v_line_progress WHERE order_line_id = ?', bare);
+  eq('dòng thêm tay không có ref ⇒ view trả NULL (không phải chuỗi rỗng)', bareRow.refs, null);
+
+  // AC-REF-09: nhập lại lần 2 không nhân bản. `order_lines` xoá ⇒ cascade xoá ref (không xoá tay).
+  db.prepare(`DELETE FROM order_lines WHERE id = ?`).run(bare);
+  eq('xoá dòng đơn hàng ⇒ order_line_refs đi theo (ON DELETE CASCADE)',
+    one(db, 'SELECT COUNT(*) c FROM order_line_refs WHERE order_line_id = ?', bare).c, 0);
+  eq('không nuốt mất ref của dòng khác', one(db, 'SELECT COUNT(*) c FROM order_line_refs').c, 82);
+
+  // PK (order_line_id, ref_no) chặn trùng — nguồn import đã `INSERT OR IGNORE` nhưng DB vẫn phải chặn.
+  const some = one(db, 'SELECT order_line_id, ref_no FROM order_line_refs LIMIT 1');
+  let dupErr = '';
+  try { db.prepare(`INSERT INTO order_line_refs (order_line_id, ref_no, target) VALUES (?, ?, 1)`)
+    .run(some.order_line_id, some.ref_no); } catch (e) { dupErr = e.message; }
+  check('PK chặn trùng (order_line_id, ref_no)', /UNIQUE|PRIMARY KEY/i.test(dupErr), dupErr);
+
+  // ref của PO này không được "rò" sang thẻ PO khác của cùng mã (lỗi gốc của FEAT-22).
+  const spill = all(db, `
+    SELECT p.code AS po, l.item_code, GROUP_CONCAT(r.ref_no) AS refs
+    FROM order_line_refs r JOIN order_lines l ON l.id = r.order_line_id JOIN pos p ON p.id = l.po_id
+    GROUP BY l.id HAVING COUNT(*) > 0`);
+  eq('mọi dòng đều lấy ref qua chính order_line_id của nó (không JOIN lỏng theo item_code)',
+    spill.filter(r => !r.refs).length, 0);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+console.log('8) production_entry_refs — nhật ký gắn số hiệu, hạn mức theo ref (FEAT-23)');
+console.log('   (SQLite thật cho schema/view/FK; hạn mức tầng DB kiểm bằng checkQtyLimit thật');
+// ══════════════════════════════════════════════════════════════════════
+{
+  const db = freshDb();
+  const { lineIds } = applyPlan(db, plan);
+
+  // Dùng 1063048GF @ PO 2919: 3 ref — 477 / 159 / 80 (target tổng 716).
+  const target = one(db, `
+    SELECT l.id, l.target FROM order_lines l JOIN pos p ON p.id = l.po_id
+    WHERE p.code='2919' AND l.item_code='1063048GF'`).id;
+  const refsOf = (code) => all(db, `
+    SELECT ref_no, target FROM order_line_refs WHERE order_line_id=? ORDER BY ref_no`, target)
+    .filter(r => r.ref_no === code)[0];
+  const D470 = refsOf('D980470');   // 477
+  const D973 = refsOf('D980973');   // 159
+  const D781 = refsOf('D980781');   // 80
+
+  eq('3 ref của 1063048GF: D980470=477, D980973=159, D980781=80',
+    [D470.target, D973.target, D781.target], [477, 159, 80]);
+  eq('Σ target của 3 ref = 716 = order_lines.target',
+    D470.target + D973.target + D781.target, 716);
+
+  const insEntry = (qty, refNo = null) => {
+    const r = db.prepare(
+      `INSERT INTO production_entries (order_line_id, date, qty, line) VALUES (?, '2026-10-05', ?, 'manual')`
+    ).run(target, qty);
+    // better-sqlite3 trả lastInsertRowid là BigInt ⇒ phải ép Number, nếu không sẽ không bind được.
+    const id = Number(r.lastInsertRowid);
+    if (refNo) {
+      db.prepare('INSERT INTO production_entry_refs (entry_id, order_line_id, ref_no) VALUES (?, ?, ?)')
+        .run(id, target, refNo);
+    }
+    return id;
+  };
+  const producedOf = (refNo) => one(db, `
+    SELECT COALESCE(SUM(e.qty),0) p FROM production_entries e
+    JOIN production_entry_refs er ON er.entry_id = e.id
+    WHERE er.order_line_id=? AND er.ref_no=?`, target, refNo).p;
+  const progress = () => String(
+    one(db, 'SELECT ref_progress FROM v_line_progress WHERE order_line_id = ?', target).ref_progress ?? ''
+  ).split(',').filter(Boolean);
+
+  // ── AC-RF-01: view trả tiến độ kèm số hiệu ──
+  eq('ref_progress có 3 mục ref:đã_làm:kế_hoạch', progress().length, 3);
+  eq('mặc định đã làm = 0 cho cả 3 ref',
+    progress().map(s => s.split(':')[1]), ['0', '0', '0']);
+  eq('unattributed = 0 khi chưa nhập gì',
+    one(db, 'SELECT unattributed_produced u FROM v_line_progress WHERE order_line_id=?', target).u, 0);
+
+  // ── AC-RF-04: nhật theo ref ⇒ sản lượng CỘNG vào thẻ cha ──
+  insEntry(200, 'D980470');
+  insEntry(100, 'D980973');
+  insEntry(50, 'D980781');
+  eq('Đã làm ở thẻ cha = 350 (tự cộng từ nhật ký)', 
+    one(db, 'SELECT produced p FROM v_line_progress WHERE order_line_id=?', target).p, 350);
+  eq('Còn lại ở thẻ cha = 366', 
+    one(db, 'SELECT remaining r FROM v_line_progress WHERE order_line_id=?', target).r, 366);
+  eq('tiến độ từng ref đúng 200/477, 100/159, 50/80',
+    progress().map(s => s.split(':').slice(0,3).join('/')),
+    ['D980470/200/477', 'D980781/50/80', 'D980973/100/159']);
+  eq('hạn mức riêng: D980470 còn 277',
+    one(db, `SELECT lr.target - COALESCE((SELECT SUM(e.qty) FROM production_entries e
+       JOIN production_entry_refs er ON er.entry_id=e.id WHERE er.ref_no=lr.ref_no),0) rem
+     FROM order_line_refs lr WHERE lr.order_line_id=? AND lr.ref_no='D980470'`, target).rem, 277);
+
+  // ── AC-RF-15: Σ nhật ký KHÔNG đổi so với trước FEAT-23 ──
+  eq('Σ qty nhật ký (bất kể gắn ref hay không) == produced của thẻ',
+    one(db, 'SELECT COALESCE(SUM(qty),0) s FROM production_entries WHERE order_line_id=?', target).s, 350);
+
+  // ── AC-RF-08: nhật ký KHÔNG gắn ref phải được báo riêng ──
+  insEntry(20); // nhập bằng form gốc, không gắn ref
+  eq('sau khi nhập không gắn ref: produced = 370',
+    one(db, 'SELECT produced p FROM v_line_progress WHERE order_line_id=?', target).p, 370);
+  eq('unattributed = 20 (không gán tự ý vào ref nào, không hiện 0 giả)',
+    one(db, 'SELECT unattributed_produced u FROM v_line_progress WHERE order_line_id=?', target).u, 20);
+  eq('Σ ref (350) + chưa gắn (20) == produced thẻ cha (370) — không lệch',
+    progress().reduce((s, c) => s + Number(c.split(':')[1]), 0) + 20, 370);
+
+  // ── AC-RF-03 / INV-R5: hạn mức RIÊNG của ref, không phải hạn mức tổng ──
+  //
+  // Gọi ĐÚNG `checkQtyLimit` thật (utils/validateQty.js là hàm thuần) theo **dạng object** mà
+  // `checkRefTarget` dùng. Đây chính là ca chặn bug đã thấy: `queries.js` trước đây gọi
+  // `checkQtyLimit` theo vị trí nên `checkLineTarget` luôn trả ok ⇒ hạn mức không có tác dụng.
+  const checkQtyLimit = (await import('../src/utils/validateQty.js')).checkQtyLimit;
+  const refLimit = (produced, incomingQty, target) =>
+    checkQtyLimit({ target, produced, incomingQty });
+
+  eq('nhập 200 vào D980470 (0 + 200 ≤ 477) ⇒ OK',
+    refLimit(producedOf('D980470'), 200, D470.target).ok, true);
+  eq('nhập 300 vào D980470 (200 + 300 = 500 > 477) ⇒ chặn',
+    refLimit(producedOf('D980470'), 300, D470.target).ok, false);
+  {
+    const r = refLimit(producedOf('D980470'), 300, D470.target);
+    eq('…mã lỗi OVER_TARGET', r.code, 'OVER_TARGET');
+    eq('…chỉ còn được nhập 277 (477 − 200)', r.remaining, 277);
+    eq('…vượt 23 pcs', r.overBy, 23);
+    eq('…thông báo phải nêu kế hoạch/đã làm/còn lại để người dùng tự sửa',
+      /\d/.test(`${r.target}${r.produced}${r.remaining}`), true);
+  }
+  eq('hạn mức riêng chặn trong khi hạn mức TỔNG vẫn cho phép (500 ≤ 716)',
+    [refLimit(producedOf('D980470'), 300, D470.target).ok, 200 + 300 <= 716],
+    [false, true]);
+  eq('ref target = 0 ⇒ không áp hạn mức (quy ước target 0 như checkLineTarget)',
+    checkQtyLimit({ target: 0, produced: 999, incomingQty: 5 }).ok, true);
+
+  // ── AC-RF-14: xoá nhật ký ⇒ dòng gắn ref đi theo ──
+  const delId = insEntry(10, 'D980781');
+  eq('trước khi xoá: ref D980781 có dòng gắn',
+    one(db, 'SELECT COUNT(*) c FROM production_entry_refs WHERE entry_id=?', delId).c, 1);
+  db.prepare('DELETE FROM production_entries WHERE id=?').run(delId);
+  eq('sau khi xoá: không còn dòng mồ côi (ON DELETE CASCADE)',
+    one(db, 'SELECT COUNT(*) c FROM production_entry_refs WHERE entry_id=?', delId).c, 0);
+
+  // ── FK tổng hợp: gắn ref của DÒNG KHÁC bị chặn ở tầng DB ──
+  const otherLine = one(db, `
+    SELECT l.id FROM order_lines l JOIN pos p ON p.id = l.po_id
+    WHERE NOT (p.code='2919' AND l.item_code='1063048GF') LIMIT 1`).id;
+  let fkMsg = '';
+  const badEntry = insEntry(5); // nhật ký của DÒNG KHÁC
+  try {
+    // ref D980470 thuộc 1063048GF@2919, gắn vào nhật ký của dòng khác ⇒ FK tổng hợp phải chặn
+    db.prepare('INSERT INTO production_entry_refs (entry_id, order_line_id, ref_no) VALUES (?, ?, ?)')
+      .run(badEntry, otherLine, 'D980470');
+  } catch (e) { fkMsg = e.message; }
+  check('FK tổng hợp chặn gắn ref của PO khác (không cần JS nhớ kiểm)',
+    /FOREIGN KEY/i.test(fkMsg), fkMsg);
+
+  // ── INV-R7: một nhật ký nhiều nhất một ref ──
+  let pkMsg = '';
+  const e2 = insEntry(5, 'D980470');
+  try {
+    db.prepare('INSERT INTO production_entry_refs (entry_id, order_line_id, ref_no) VALUES (?, ?, ?)')
+      .run(e2, target, 'D980973');
+  } catch (e) { pkMsg = e.message; }
+  check('PRIMARY KEY (entry_id) chặn một nhật ký gắn 2 ref', /UNIQUE|PRIMARY KEY/i.test(pkMsg), pkMsg);
+
+  // ── AC-RF-10: dòng không có ref ⇒ ref_progress NULL, unattributed 0 ──
+  const poId = Number(db.prepare(`INSERT INTO pos (order_batch_id, code) VALUES (1, 'BARE-PO')`).run().lastInsertRowid);
+  const bare = Number(db.prepare(
+    `INSERT INTO order_lines (po_id, item_code, target) VALUES (?, 'BARE-1', 500)`).run(poId).lastInsertRowid);
+  const bareV = one(db, 'SELECT ref_progress, unattributed_produced FROM v_line_progress WHERE order_line_id=?', bare);
+  eq('thẻ không có ref ⇒ ref_progress NULL (UI ẩn)', bareV.ref_progress, null);
+  eq('…và unattributed_produced = 0, không NULL', bareV.unattributed_produced, 0);
+
+}
+
+// ══════════════════════════════════════════════════════════════════════
+console.log('\n10) Guard: không có backtick lọt vào khối SQL');
+// ══════════════════════════════════════════════════════════════════════
+{
+  // Đã 3 lần gặp: một backtick trong ghi chú `--` bên trong template SQL sẽ khoá sớm chuỗi,
+  // biến phần còn lại thành JS ⇒ `expo lint` và `tsc` báo lỗi ở file KHÔNG liên quan
+  // (đã từng làm hỏng `ItemCard`, `HistoryScreen`, `useAppStore`). Guard chốt lại.
+  const src = readFileSync(new URL('../src/db/schema.js', import.meta.url), 'utf8');
+  for (const name of ['CREATE_TABLES_SQL', 'CREATE_VIEWS_SQL']) {
+    const body = src.match(new RegExp(`export const ${name} = \`([\\s\\S]*?)\`;`))?.[1] ?? '';
+    check(`${name}: không có backtick trong thân`,
+      body.length > 0 && !body.includes('`'), `dài ${body.length}`);
+  }
+  const q = readFileSync(new URL('../src/db/queries.js', import.meta.url), 'utf8');
+  // Ghi chú SQL trong queries.js nằm trong template `db.getAllAsync(\`...\`)` — cùng lỗi, cùng hậu quả.
+  const strays = [...q.matchAll(/`SELECT[\s\S]*?`/g)]
+    .filter(m => m[0].includes('--') && m[0].includes('\n') && /--[^\n]*`/.test(m[0]));
+  check('queries.js: không có backtick trong ghi chú SQL', strays.length === 0, `${strays.length} chỗ`);
+}
+
+console.log('\n9) Bất biến tổng thể sau FEAT-23 (DB sạch, không fixture nào ở trên)');
+{
+  // DB MỚI: các ca ở khối 8 cố tình gắn ref hỏng (FK/PK), chèn PO giả và thêm nhật ký
+  // nên nếu đo bất biến tổng thể trên chính DB đó thì số đúng vẫn bị báo sai.
+  const db = freshDb();
+  applyPlan(db, plan);
+
+  eq('v_po_progress vẫn ra 12 dòng PO', all(db, 'SELECT * FROM v_po_progress').length, 12);
+  eq('Σ target toàn đơn vẫn 25520 (ref không cộng vào PO)',
+    all(db, 'SELECT SUM(target) t FROM v_po_progress')[0].t, 25520);
+  eq('v_line_progress vẫn ra 76 thẻ (ref KHÔNG tạo thẻ mới)',
+    all(db, 'SELECT * FROM v_line_progress').length, 76);
+  eq('82 dòng order_line_refs (không rơi món)',
+    all(db, 'SELECT * FROM order_line_refs').length, 82);
+  eq('Σ produced toàn đơn = 0 khi chưa có nhật ký',
+    all(db, 'SELECT SUM(produced) s FROM v_po_progress')[0].s, 0);
+
+  // Gắn ref KHÔNG được làm đổi số thẻ hay tổng PO — chỉ phân bổ sản lượng.
+  const line = one(db, `
+    SELECT l.id FROM order_lines l JOIN pos p ON p.id = l.po_id
+    WHERE p.code='2919' AND l.item_code='1063048GF'`).id;
+  const entry = db.prepare(
+    `INSERT INTO production_entries (order_line_id, date, qty, line) VALUES (?, '2026-10-05', 100, 'manual')`
+  ).run(line);
+  db.prepare('INSERT INTO production_entry_refs (entry_id, order_line_id, ref_no) VALUES (?, ?, ?)')
+    .run(Number(entry.lastInsertRowid), line, 'D980470');
+
+  eq('sau khi gắn ref: vẫn 12 PO / 76 thẻ / Σ target 25520',
+    [all(db, 'SELECT * FROM v_po_progress').length,
+     all(db, 'SELECT * FROM v_line_progress').length,
+     all(db, 'SELECT SUM(target) t FROM v_po_progress')[0].t],
+    [12, 76, 25520]);
+  eq('…chỉ produced của 1 thẻ cha tăng lên 100',
+    all(db, 'SELECT SUM(produced) s FROM v_po_progress')[0].s, 100);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+console.log('\n11) Guard: REQUIRED_COLUMNS khớp CREATE_TABLES_SQL (BUGFIX-23)');
+// ══════════════════════════════════════════════════════════════════════
+{
+  // `src/db/index.js` dùng `REQUIRED_COLUMNS` để phát hiện DB của build khác và để xác minh
+  // shape sau khi tạo. Nếu ai thêm cột mà quên khai báo ở đó ⇒ app **không khởi động được** trên
+  // đúng lỗi ta vừa gặp, và không ca test nào bắt được. Vì vậy bắt buộc kiểm ở đây.
+  const { REQUIRED_COLUMNS, ADDABLE_COLUMN_DECLS } = await import('../src/db/schema.js');
+  const src = readFileSync(new URL('../src/db/schema.js', import.meta.url), 'utf8');
+
+  // Cột từ `CREATE TABLE` trong script: lấy dòng `  tên_cột KIỂU` trong phần CREATE TABLE.
+  const declared = {};
+  for (const m of src.matchAll(/CREATE TABLE IF NOT EXISTS (\w+) \(([\s\S]*?)\n\);/g)) {
+    const cols = [];
+    for (const line of m[2].split('\n')) {
+      const c = /^\s{2}([a-z_]\w*)\s+[A-Z]/.exec(line);
+      if (c) cols.push(c[1]);
+    }
+    declared[m[1]] = cols;
+  }
+  check('đọc được bộ cột từ CREATE_TABLES_SQL', Object.keys(declared).length >= 11,
+    `thấy ${Object.keys(declared).length} bảng`);
+
+  // 1) mọi bảng trong REQUIRED_COLUMNS đều có trong CREATE_TABLES_SQL và ngược lại
+  eq('REQUIRED_COLUMNS có đúng các bảng của CREATE_TABLES_SQL',
+    Object.keys(REQUIRED_COLUMNS).sort(), Object.keys(declared).sort());
+
+  // 2) mọi bảng đều khai đủ cột, không thừa — lệch một chỗ là app hỏng trên máy
+  const diffs = [];
+  for (const [table, required] of Object.entries(REQUIRED_COLUMNS)) {
+    const actual = new Set(declared[table] ?? []);
+    const missing = required.filter(c => !actual.has(c));
+    const extra = (declared[table] ?? []).filter(c => !required.includes(c));
+    if (missing.length || extra.length) {
+      diffs.push(`${table}: thiếu [${missing}] thừa [${extra}]`);
+    }
+  }
+  check('từng bảng khai đúng bộ cột của CREATE_TABLES_SQL', diffs.length === 0, diffs.join('; '));
+
+  // 3) `ADDABLE_COLUMN_DECLS` chỉ được chứa cột có thật và **không** phải cột NOT NULL bắt buộc
+  const badKeys = Object.keys(ADDABLE_COLUMN_DECLS)
+    .filter(k => !REQUIRED_COLUMNS[k.split('.')[0]]?.includes(k.split('.')[1]));
+  check('ADDABLE_COLUMN_DECLS không chứa cột không tồn tại', badKeys.length === 0, badKeys.join(', '));
+
+  // 4) Chỉ được vá tự động cột **nullable** hoặc `NOT NULL` **có DEFAULT hằng**.
+  //    `ALTER TABLE … ADD COLUMN x NOT NULL` (không default) hỏng khi bảng đã có dòng, và đoán
+  //    giá trị thay người dùng thì tệ hơn là xoá dựng lại — xem `legacyReason()`.
+  const unsafe = [];
+  for (const k of Object.keys(ADDABLE_COLUMN_DECLS)) {
+    const decl = ADDABLE_COLUMN_DECLS[k];
+    if (/NOT\s+NULL/i.test(decl) && !/DEFAULT/i.test(decl)) unsafe.push(k);
+  }
+  check('mọi cột vá được đều nullable hoặc NOT NULL có DEFAULT hằng',
+    unsafe.length === 0, unsafe.join(', '));
+
+  // 5) Ngược lại: cột NOT NULL **không** DEFAULT mà lại được liệt kê ⇒ app sẽ ném lỗi
+  //    `Cannot add a NOT NULL column with default value NULL` giữa lúc mở app.
+  const risky = [];
+  for (const [table, body] of Object.entries(
+    Object.fromEntries([...src.matchAll(/CREATE TABLE IF NOT EXISTS (\w+) \(([\s\S]*?)\n\);/g)]
+      .map(m => [m[1], m[2]]))
+  )) {
+    for (const line of body.split('\n')) {
+      const c = /^\s{2}([a-z_]\w*)\s+\w+ NOT NULL(?!.*DEFAULT)/.exec(line);
+      if (c && ADDABLE_COLUMN_DECLS[`${table}.${c[1]}`]) risky.push(`${table}.${c[1]}`);
+    }
+  }
+  check('không cột NOT NULL không DEFAULT nào nằm trong danh sách vá tự động',
+    risky.length === 0, risky.join(', '));
 }
 
 console.log(`\nKết quả: ${pass} passed, ${fail} failed`);

@@ -57,6 +57,91 @@ const SCENARIOS = {
   },
 
   /**
+   * BUGFIX-23 — lỗi thật trên thiết bị (2026-10-05): `no such column: order_line_id`.
+   *
+   * File DB do **một build trung gian** tạo: đúng *tên bảng* của thiết kế mới nhưng `pallet_lines`
+   * chưa có `order_line_id`. `isLegacyDb()` cũ chỉ nhìn tên bảng ⇒ "đúng schema" ⇒ **không xoá** ⇒
+   * `CREATE TABLE IF NOT EXISTS` no-op ⇒ `CREATE INDEX ix_plines_line ON pallet_lines(order_line_id)`
+   * nổ ⇒ **app không khởi động**. Kịch bản này mô phỏng đúng bằng `columnSets`.
+   */
+  async 'intermediate-build'() {
+    const { getDb } = await loadApp({
+      tables: ['order_batches', 'pos', 'order_lines', 'production_entries', 'containers', 'pallets',
+        'pallet_lines'],
+      // `pallet_lines` thiếu `order_line_id`; `production_entries` còn đủ cột.
+      columnSets: { pallet_lines: ['id', 'pallet_id', 'qty', 'done'] },
+      userVersion: 2,
+    });
+
+    let db = null, err = null;
+    try { db = await getDb(); } catch (e) { err = e; }
+
+    check('getDb() không ném "no such column: order_line_id"',
+      db !== null, `lỗi: ${err?.message}`);
+    check('…và không ném lỗi nào khác', err === null, `lỗi: ${err?.message}`);
+    if (!db) return;
+
+    check('phát hiện DB của build khác ⇒ xoá dựng lại (không đoán mò giá trị cho cột NOT NULL)',
+      deletes.includes(DB_FILE), `deletes=${JSON.stringify(deletes)}`);
+    check('mở lại sau khi xoá', openCounts.get(DB_FILE) === 2, `openCounts=${openCounts.get(DB_FILE)}`);
+
+    const log = state.lastDb.log;
+    check('bảng mới đủ cột: pallet_lines có order_line_id',
+      /CREATE TABLE IF NOT EXISTS pallet_lines/i.test(log.join('\n'))
+      && !log.some(s => /^ALTER TABLE pallet_lines/i.test(s)),
+      `log: ${log.filter(s => /pallet_lines/i.test(s)).join(' || ')}`);
+    check('view được tạo lại sau khi có bảng', log.some(s => /\bCREATE VIEW v_line_progress/i.test(s)),
+      `log: ${log.join(' || ')}`);
+  },
+
+  /**
+   * AC-DB-12 — bảng thiếu cột **nullable** thì tự `ALTER TABLE … ADD COLUMN`, **không xoá DB**
+   * (xoá là mất dữ liệu nhập tay — thêm cột nullable thì không có lý do gì phải xoá).
+   */
+  async 'missing-nullable-column'() {
+    const { getDb } = await loadApp({
+      tables: ['order_batches', 'pos', 'order_lines', 'pallet_lines'],
+      // `order_lines` của build cũ chưa có 4 cột đo của FEAT-17.
+      columnSets: { order_lines: ['id', 'po_id', 'item_code', 'target'] },
+      userVersion: 2,
+    });
+
+    let db = null, err = null;
+    const { lines, value, error } = await captureLog(() => getDb());
+    db = value; err = error;
+    check('tự vá được cột nullable ⇒ getDb() thành công', db !== null, `lỗi: ${err?.message}`);
+    eq('KHÔNG xoá file DB khi chỉ thiếu cột nullable', deletes.length, 0);
+
+    const log = state.lastDb.log;
+    const added = log.filter(s => /^ALTER TABLE order_lines ADD COLUMN/i.test(s));
+    eq('vá đủ 4 cột thiếu', added.length, 4);
+    check('vá cột `nw_kg`…', added.some(s => /ADD COLUMN nw_kg/i.test(s)), `log: ${added.join(' || ')}`);
+    check('có dòng log nêu cột đã bổ sung (bằng chứng vì sao vá)',
+      lines.some(l => /bổ sung cột còn thiếu: order_lines\.nw_kg/.test(l)),
+      `log: ${JSON.stringify(lines)}`);
+  },
+
+  /**
+   * AC-DB-13 — vá **hỏng** phải báo lỗi **nêu tên bảng và cột**, không phải lỗi SQL mơ hồ.
+   * Đây là bài học của `no such column: order_line_id`: lỗi đó không nói file DB do build nào tạo.
+   */
+  async 'verify-reports-missing'() {
+    const { getDb } = await loadApp({
+      tables: ['order_batches', 'pos', 'order_lines'],
+      columnSets: { order_lines: ['id', 'po_id', 'item_code', 'target'] },
+      userVersion: 2,
+      failAlter: 'nw_kg',
+    });
+    let err = null;
+    try { await getDb(); } catch (e) { err = e; }
+    const msg = String(err?.message || '');
+    check('vá hỏng ⇒ ném lỗi', err !== null);
+    check('lỗi nêu đích danh bảng và cột còn thiếu', /order_lines/.test(msg) && /nw_kg/.test(msg),
+      `message: ${msg}`);
+    check('lỗi nêu nguyên nhân để chẩn đoán được', /database is locked/.test(msg), `message: ${msg}`);
+  },
+
+  /**
    * AC-DB-08 + AC-DB-10 — đúng tình huống máy thật: `user_version = 3` nhưng `items` vẫn thiếu
    * 4 cột, vì `3 > 3` ⇒ `runMigrations` bỏ qua v3. Guard phải tự vá (đó chính là lỗi
    * `no such column: nw_kg` đã gặp). FEAT-18: v4 vẫn chạy (4 > 3) nên `item_po` được tạo.
