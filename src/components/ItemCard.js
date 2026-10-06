@@ -7,7 +7,7 @@ import EntryLogRow from '@/components/EntryLogRow';
 import { pctClass } from '@/store/useAppStore';
 import { fetchEntriesForLine } from '@/db/queries';
 import {
-  parseQty, formatQtyError,
+  parseQty, formatQtyError, checkQtyLimit,
   INVALID_QTY_TITLE, INVALID_QTY_MESSAGE, OVER_TARGET_TITLE,
 } from '@/utils/validateQty';
 // FEAT-11: xoá mã trong 1 chạm. Dùng chung helper với nút trong ItemEditSheet (AC-EDIT-33/34).
@@ -134,6 +134,19 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
   }
 
   /**
+   * Kiểm tra client-side trước khi gửi: số lượng nhập có vượt kế hoạch không.
+   * Dùng `checkQtyLimit` (FEAT-09) để tái sử dụng logic & thông báo.
+   */
+  function validateQtyBeforeAdd(qtyValue, target, produced, label) {
+    const res = checkQtyLimit({ target, produced, incomingQty: qtyValue });
+    if (!res.ok) {
+      Alert.alert(label, formatQtyError(res, item.ntk));
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Ghi một mục nhật ký gắn vào **một** số hiệu.
    *
    * Dùng chung `readNumber` với form gốc nên ô rỗng ⇒ 0 ⇒ không ghi (không lỗi, giống `AC-ITEM-05`).
@@ -145,6 +158,11 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
     const qRes = readNumber(refQty[`${REF_KEY_PREFIX}${refNo}`] ?? '');
     if (qRes.invalid) { showInvalidQty(); return; }
     if (qRes.value <= 0) return;
+
+    // Client-side validation: check ref target before calling DB
+    if (!validateQtyBeforeAdd(qRes.value, entry.target, entry.produced, 'Vượt kế hoạch số hiệu')) {
+      return;
+    }
 
     const res = await onAddEntry(item.order_line_id, {
       date: todayLocal(),
@@ -175,6 +193,12 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
     const q = qRes.value;
     const dq = dRes.value;
     if (q <= 0 && dq <= 0) return;
+
+    // Client-side validation: check total target before calling DB
+    if (q > 0 && !validateQtyBeforeAdd(q, item.target, produced, OVER_TARGET_TITLE)) {
+      return;
+    }
+
     const types = Object.keys(defectTypes).filter(k => defectTypes[k]);
     const res = await onAddEntry(item.order_line_id, {
       date: todayLocal(),
