@@ -11,7 +11,7 @@ import { View, Text, StyleSheet } from 'react-native';
 /** Ô số: `null`/`undefined` ⇒ `—` (không hiện 0 cho dữ liệu không xác định — INV-I1). */
 function Num({ value, style, color }) {
   const text = value === null || value === undefined ? '—' : Number(value).toLocaleString();
-  return <Text style={[style, { color }]}>{text}</Text>;
+  return <Text style={[{ color }, ...(Array.isArray(style) ? style : [style])]}>{text}</Text>;
 }
 
 export default function PoSummaryTable({ summaries, unattributed = 0, theme }) {
@@ -41,16 +41,27 @@ export default function PoSummaryTable({ summaries, unattributed = 0, theme }) {
         <Text style={[styles.th, styles.colNum, { color: theme.sub }]}>Đã sản xuất</Text>
         <Text style={[styles.th, styles.colNum, { color: theme.sub }]}>Còn lại</Text>
       </View>
-      {rows.map(r => (
-        <View key={r.key} style={[styles.row, { borderBottomColor: theme.line }]}>
-          <Text style={[styles.td, styles.colPo, { color: theme.ink }]} numberOfLines={1}>
-            {r.label}
-          </Text>
-          <Num value={r.target} style={[styles.td, styles.colNum]} color={theme.ink} />
-          <Num value={r.produced} style={[styles.td, styles.colNum]} color={theme.good} />
-          <Num value={r.remaining} style={[styles.td, styles.colNum]} color={theme.warn} />
-        </View>
-      ))}
+      {rows.map(r => {
+        const isCompleted = r.target > 0 && r.produced >= r.target;
+        const lineStyle = isCompleted ? 'line-through' : 'none';
+        return (
+          <View key={r.key} style={[styles.row, { borderBottomColor: theme.line }]}>
+            <Text
+              style={[
+                styles.td,
+                styles.colPo,
+                { color: theme.ink, textDecorationLine: lineStyle },
+              ]}
+              numberOfLines={1}
+            >
+              {r.label}
+            </Text>
+            <Num value={r.target} style={[styles.td, styles.colNum, { textDecorationLine: lineStyle }]} color={theme.ink} />
+            <Num value={r.produced} style={[styles.td, styles.colNum, { textDecorationLine: lineStyle }]} color={theme.good} />
+            <Num value={r.remaining} style={[styles.td, styles.colNum, { textDecorationLine: lineStyle }]} color={theme.warn} />
+          </View>
+        );
+      })}
       {hasShared && (
         <Text style={[styles.note, { color: theme.sub }]}>
           {unattributedQty > 0

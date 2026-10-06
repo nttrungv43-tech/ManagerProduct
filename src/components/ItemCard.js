@@ -254,18 +254,22 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
       <TouchableOpacity style={styles.top} onPress={() => setExpanded(!expanded)}>
         <View>
           <Text style={[styles.title, { color: theme.ink }]}>Mã {item.ntk}</Text>
-          <Text style={{ color: theme.sub, fontSize: 11.5, marginTop: 2 }}>PO {item.po}</Text>
+          <Text style={styles.poText(theme)}>PO {item.po}</Text>
         </View>
-        <Text style={{ color: pctColor, fontSize: 15, fontWeight: '700' }}>{pct}% {expanded ? '▴' : '▾'}</Text>
+        <Text style={styles.pctText(theme, pctColor)}>{pct}% {expanded ? '▴' : '▾'}</Text>
       </TouchableOpacity>
 
       <ProgressBar pct={pct} color={pctColor} theme={theme} />
 
       <View style={styles.numsRow}>
-        <Text style={styles.numTxt(theme)}>Kế hoạch: {item.target}</Text>
-        <Text style={styles.numTxt(theme)}>Đã làm: {produced}</Text>
-        <Text style={styles.numTxt(theme)}>Còn lại: {remaining}</Text>
-        <Text style={[styles.numTxt(theme), { color: theme.bad }]}>Lỗi: {item.defect || 0}</Text>
+        <Text style={styles.numLabel(theme)}>Kế hoạch:</Text>
+        <Text style={styles.numValue(theme)}>{item.target.toLocaleString('vi-VN')}</Text>
+        <Text style={styles.numLabel(theme)}>Đã làm:</Text>
+        <Text style={styles.numValue(theme)}>{produced.toLocaleString('vi-VN')}</Text>
+        <Text style={styles.numLabel(theme)}>Còn lại:</Text>
+        <Text style={styles.numValue(theme)}>{remaining.toLocaleString('vi-VN')}</Text>
+        <Text style={styles.numLabel(theme)}>Lỗi:</Text>
+        <Text style={styles.numValueBad(theme)}>{(item.defect || 0).toLocaleString('vi-VN')}</Text>
       </View>
 
       {/* FEAT-17 (AC-NEW-05/06): 4 trường từ packing list. FEAT-22: chỉ còn `Kiện` — `KL`/`TKL`/
@@ -274,7 +278,7 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
       {hasPackingMetrics(item) && (
         <View style={[styles.numsRow, { marginTop: 4 }]}>
           {metricParts(item).map(part => (
-            <Text key={part} style={styles.numTxt(theme)}>{part}</Text>
+            <Text key={part} style={styles.numMetric(theme)}>{part}</Text>
           ))}
         </View>
       )}
@@ -286,7 +290,7 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
         <View style={styles.refBox}>
           <Text style={styles.refLabel(theme)}>{refLabel(item.refs)}</Text>
           {refRows(item).map(line => (
-            <Text key={line} style={styles.refTxt(theme)}>{line}</Text>
+            <Text key={line} style={styles.refValue(theme)}>{line}</Text>
           ))}
         </View>
       )}
@@ -375,12 +379,8 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
                 return (
                   <View key={entry.ref_no} style={styles.refInputRow}>
                     <View style={{ flex: 1 }}>
-                      <Text style={{ color: theme.ink, fontSize: 13, fontWeight: '600' }}>
-                        {entry.ref_no}
-                      </Text>
-                      <Text style={{ color: theme.sub, fontSize: 11.5, marginTop: 1 }}>
-                        {refProgressText(entry)}
-                      </Text>
+                      <Text style={styles.refNoText(theme)}>{entry.ref_no}</Text>
+                      <Text style={styles.refProgressText(theme)}>{refProgressText(entry)}</Text>
                     </View>
                     <TextInput
                       style={[styles.refInput(theme), { width: 74 }]}
@@ -402,9 +402,7 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
               {/* AC-RF-08: phần chưa gắn số hiệu phải được nói ra, nếu không `Σ` các ref sẽ lệch
                   với `Đã làm` ở thẻ cha mà không có lý do. */}
               {unattributed && (
-                <Text style={{ color: theme.sub, fontSize: 11.5, marginTop: 6, fontStyle: 'italic' }}>
-                  {unattributed}
-                </Text>
+                <Text style={styles.unattributedText(theme)}>{unattributed}</Text>
               )}
             </View>
           )}
@@ -489,22 +487,26 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
 const styles = StyleSheet.create({
   card: { borderWidth: 1.5, borderRadius: 6, padding: 14, marginBottom: 10 },
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  title: { fontSize: 16, fontWeight: '700' },
-  numsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 9 },
-  // FEAT-19: ghi chú nhỏ dưới PO (sản lượng dùng chung / chưa tách được theo PO).
+  title: { fontSize: 17, fontWeight: '800', letterSpacing: 0.3 },
+  poText: (theme) => ({ color: theme.sub, fontSize: 12.5, marginTop: 2, fontWeight: '500' }),
+  pctText: (theme, pctColor) => ({ color: pctColor, fontSize: 16, fontWeight: '800' }),
+  numsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 10 },
   note: { fontSize: 10.5, marginTop: 2, fontStyle: 'italic' },
   hint: { fontSize: 11, marginBottom: 6 },
   editRow: { marginTop: 10, alignSelf: 'flex-start', flexDirection: 'row', gap: 16 },
   editBtn: { flexDirection: 'row' },
-  numTxt: (theme) => ({ color: theme.sub, fontSize: 12 }),
-  // FEAT-22: khối số hiệu tách nhẹ khỏi dòng số bằng **khoảng lề + cỡ chữ**, không dùng viền màu
-  // (màu hard-code trong component bị `SPEC-rules` §0.3 cấm).
-  refBox: { marginTop: 8, paddingLeft: 6 },
-  refLabel: (theme) => ({ color: theme.sub, fontSize: 10.5, fontWeight: '700', textTransform: 'uppercase' }),
-  refTxt: (theme) => ({ color: theme.ink, fontSize: 12.5, marginTop: 2 }),
-  // FEAT-23: khối nhập theo số hiệu, tách khỏi form nhập tổng bằng nền nhạt hơn.
+  numLabel: (theme) => ({ color: theme.sub, fontSize: 12, fontWeight: '500' }),
+  numValue: (theme) => ({ color: theme.ink, fontSize: 14.5, fontWeight: '700' }),
+  numValueBad: (theme) => ({ color: theme.bad, fontSize: 14.5, fontWeight: '700' }),
+  numMetric: (theme) => ({ color: theme.ink, fontSize: 13, fontWeight: '600' }),
+  refBox: { marginTop: 10, paddingLeft: 6 },
+  refLabel: (theme) => ({ color: theme.sub, fontSize: 10.5, fontWeight: '700', textTransform: 'uppercase', marginBottom: 3 }),
+  refValue: (theme) => ({ color: theme.ink, fontSize: 13.5, fontWeight: '600', marginTop: 2 }),
   refSection: (theme) => ({ marginTop: 14, paddingTop: 10, borderTopWidth: 1, borderTopColor: theme.line }),
   refInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+  refNoText: (theme) => ({ color: theme.ink, fontSize: 14, fontWeight: '700' }),
+  refProgressText: (theme) => ({ color: theme.sub, fontSize: 12, marginTop: 2, fontWeight: '500' }),
+  unattributedText: (theme) => ({ color: theme.sub, fontSize: 11.5, marginTop: 6, fontStyle: 'italic', fontWeight: '500' }),
   refInput: (theme) => ({
     borderWidth: 1, borderColor: theme.line, backgroundColor: theme.bg, color: theme.ink,
     borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14,
