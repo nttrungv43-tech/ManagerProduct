@@ -7,7 +7,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
 import {
   detectFormat, detectFormatError, estimateImportCount,
-  FORMAT_ENTRIES, FORMAT_PACKING_LIST, FORMAT_PACKING_V1,
+  FORMAT_ENTRIES, FORMAT_PACKING_V1,
 } from '@/utils/importFormat';
 
 export default function ImportJsonButton({ onImport, hasContainerData, theme }) {
@@ -57,17 +57,11 @@ export default function ImportJsonButton({ onImport, hasContainerData, theme }) 
 
     const count = estimateImportCount(parsed);
 
-    // AC-EDIT-25: batch đã có cấu trúc container ⇒ import sẽ ghi đè cả chỉnh sửa tay.
-    // FEAT-17: định dạng mới cũng ghi đè cấu trúc container ⇒ cùng cảnh báo.
-    const overwriteWarn = (fmt === FORMAT_PACKING_LIST || fmt === FORMAT_PACKING_V1) && hasContainerData
-      ? '\n\n⚠ Lưu ý: import sẽ GHI ĐÈ toàn bộ cấu trúc kiện đang có, kể cả phần bạn đã sửa tay.'
-      : '';
-
     Alert.alert(
       'Xác nhận nhập',
       fmt === FORMAT_ENTRIES
         ? `Nhập ${count} nhật ký sản xuất từ file "${asset.name}"?`
-        : `Nhập ${count} mã hàng từ packing list "${asset.name}"?\nDữ liệu sẽ cập nhật items cho đơn hiện tại.${overwriteWarn}`,
+        : `Nhập ${count} mã hàng từ packing list "${asset.name}"?\nDữ liệu sẽ được thêm vào/cập nhật cho đơn hiện tại (dữ liệu các đơn cũ được giữ nguyên).`,
       [
         { text: 'Huỷ', style: 'cancel' },
         {
@@ -76,20 +70,24 @@ export default function ImportJsonButton({ onImport, hasContainerData, theme }) 
             setLoading(true);
             try {
               const res = await onImport(jsonContent);
+              if (res && res.ok === false) {
+                Alert.alert('Lỗi nhập dữ liệu', res.error?.message || res.error?.code || 'Có lỗi xảy ra khi nhập dữ liệu.');
+                return;
+              }
               if (fmt === FORMAT_ENTRIES) {
                 // FEAT-09: báo riêng số mục bị bỏ qua vì vượt đơn đặt hàng.
-                const over = res.skippedOver > 0
+                const over = (res?.skippedOver ?? 0) > 0
                   ? `\nVượt đơn đặt hàng: ${res.skippedOver} mục bị bỏ qua.`
                   : '';
-                Alert.alert('Hoàn tất', `Đã nhập: ${res.imported} mục.\nBỏ qua: ${res.skipped} mục.${over}`);
+                Alert.alert('Hoàn tất', `Đã nhập: ${res?.imported ?? 0} mục.\nBỏ qua: ${res?.skipped ?? 0} mục.${over}`);
               } else {
                 // FEAT-17: báo thêm số shipment + cảnh báo mã thuộc nhiều PO (nhãn PO dạng `A+B`).
                 const v1 = fmt === FORMAT_PACKING_V1;
-                const multiPo = v1 && res.multiPoItems > 0
+                const multiPo = v1 && (res?.multiPoItems ?? 0) > 0
                   ? `\n${res.multiPoItems} mã thuộc nhiều PO (hiển thị dạng A+B).`
                   : '';
-                const shipments = v1 && res.shipments ? `\nShipment: ${res.shipments}` : '';
-                Alert.alert('Hoàn tất', `Đã nhập: ${res.imported} mã hàng.\nContainer: ${res.containers} | Kiện: ${res.pallets}${shipments}${multiPo}`);
+                const shipments = v1 && res?.shipments ? `\nShipment: ${res.shipments}` : '';
+                Alert.alert('Hoàn tất', `Đã nhập: ${res?.imported ?? 0} mã hàng.\nContainer: ${res?.containers ?? 0} | Kiện: ${res?.pallets ?? 0}${shipments}${multiPo}`);
               }
             } catch (e) {
               Alert.alert('Lỗi', e.message || 'Có lỗi xảy ra khi nhập dữ liệu.');

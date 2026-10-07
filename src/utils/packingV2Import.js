@@ -158,7 +158,9 @@ export function buildPalletPlan(json, posRows, lines) {
       const poIdx = poIndex.get(String(sh?.po_no ?? '').trim());
       if (poIdx === undefined) continue;
       for (const ct of sh?.containers ?? []) {
-        const containerNo = String(ct?.container_no ?? '').trim();
+        const containerNo = String(
+          ct?.container_no || ct?.container_label || (ct?.container_index ? `Container ${ct.container_index}` : '')
+        ).trim();
         if (!containerNo) continue;
         let cIdx = containerSeen.get(containerNo);
         if (cIdx === undefined) {

@@ -31,6 +31,18 @@ import { buildImportPlanV2 } from '@/utils/packingV2Import';
 const fail = (code, extra = {}) => ({ ok: false, error: { code, ...extra } });
 const done = (extra = {}) => ({ ok: true, ...extra });
 
+/**
+ * Bọc giao dịch với expo-sqlite để hứng kết quả trả về từ callback.
+ * `db.withTransactionAsync` trả về Promise<void>, helper này lưu và trả về giá trị của `fn`.
+ */
+async function withTransaction(db, fn) {
+  let result;
+  await db.withTransactionAsync(async () => {
+    result = await fn();
+  });
+  return result;
+}
+
 /** `NULL` → 0; tránh `null` lọt vào phép tính JS và thành NaN trên màn hình. */
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
@@ -308,7 +320,7 @@ export async function addEntry(orderLineId, { date, qty, line, defectQty, defect
   const refOk = await checkRefTarget(db, orderLineId, refNo, q);
   if (!refOk.ok) return refOk;
 
-  return db.withTransactionAsync(async () => {
+  return withTransaction(db, async () => {
     const res = await db.runAsync(
       `INSERT INTO production_entries (order_line_id, date, qty, line, defect_qty)
        VALUES (?, ?, ?, ?, ?)`,
@@ -361,7 +373,7 @@ export async function updateEntry(entryId, { date, qty, line, defectQty, defectT
   const lineKind = line === 'auto' ? 'auto' : 'manual';
   const defect = Math.max(parseQty(defectQty) ?? 0, 0);
 
-  return db.withTransactionAsync(async () => {
+  return withTransaction(db, async () => {
     await db.runAsync(
       `UPDATE production_entries SET date = ?, qty = ?, line = ?, defect_qty = ? WHERE id = ?`,
       [d, q, lineKind, defect, entryId]
@@ -386,7 +398,7 @@ export async function removeEntry(entryId) {
     `SELECT order_line_id FROM production_entries WHERE id = ?`, [entryId]
   );
   if (!cur) return fail('ENTRY_NOT_FOUND');
-  return db.withTransactionAsync(async () => {
+  return withTransaction(db, async () => {
     // `production_defects` có ON DELETE CASCADE nên không cần xoá tay.
     await db.runAsync(`DELETE FROM production_entries WHERE id = ?`, [entryId]);
     return done();
@@ -520,7 +532,7 @@ export async function removeItemsByPo(batchId, po) {
     return fail('ITEM_HAS_ENTRIES', { po: code, blocked: bad.map(b => b.ntk) });
   }
 
-  return db.withTransactionAsync(async () => {
+  return withTransaction(db, async () => {
     await db.runAsync(
       `DELETE FROM order_lines WHERE po_id IN (SELECT id FROM pos WHERE order_batch_id = ? AND code = ?)`,
       [id, code]
@@ -609,7 +621,7 @@ export async function addPallet(batchId, containerId, { no, items }) {
   const norm = normalizePalletItems(items);
   if (norm.length === 0) return fail('PALLET_EMPTY');
 
-  return db.withTransactionAsync(async () => {
+  return withTransaction(db, async () => {
     const res = await db.runAsync(
       `INSERT INTO pallets (container_id, po_id, pallet_no, is_mixed) VALUES (?, ?, ?, ?)`,
       [containerId, ct.po_id, palletNo, norm.length > 1 ? 1 : 0]
@@ -634,7 +646,7 @@ export async function updatePallet(batchId, containerId, palletNo, { items }) {
   const norm = normalizePalletItems(items);
   if (norm.length === 0) return fail('PALLET_EMPTY');
 
-  return db.withTransactionAsync(async () => {
+  return withTransaction(db, async () => {
     await db.runAsync(`DELETE FROM pallet_lines WHERE pallet_id = ?`, [pal.id]);
     for (const it of norm) {
       await db.runAsync(
@@ -850,20 +862,23 @@ export async function deleteArchive(batchId) {
 /**
  * Hoàn tất đơn: archive đơn cũ + tạo đơn mới **trắng** (FEAT-14), trong MỘT transaction
  * (INV-B3). `AND status='active'` chống gọi song song (INV-B1).
+ * @param {Array} containers - dữ liệu container/kiện của đơn đang active (để lưu vào batch archived)
  */
-export async function finishOrder() {
+export async function finishOrder(containers = []) {
   const db = await getDb();
   const active = await db.getFirstAsync(
-    `SELECT id FROM order_batches WHERE status = 'active' ORDER BY id DESC LIMIT 1`
+    `SELECT id, container_data FROM order_batches WHERE status = 'active' ORDER BY id DESC LIMIT 1`
   );
   if (!active) return fail('NO_ACTIVE_BATCH');
-  return db.withTransactionAsync(async () => {
+  // Ưu tiên containers truyền vào (từ store), fallback container_data từ DB
+  const containerDataToSave = containers.length > 0 ? JSON.stringify(containers) : (active.container_data || '[]');
+  return withTransaction(db, async () => {
     await db.runAsync(
-      `UPDATE order_batches SET status='archived', finished_date=? WHERE id = ? AND status='active'`,
-      [todayLocal(), active.id]
+      `UPDATE order_batches SET status='archived', finished_date=?, container_data=? WHERE id = ? AND status='active'`,
+      [todayLocal(), containerDataToSave, active.id]
     );
     const res = await db.runAsync(
-      `INSERT INTO order_batches (status, imported_at) VALUES ('active', ?)`, [todayLocal()]
+      `INSERT INTO order_batches (status, imported_at, container_data) VALUES ('active', ?, '[]')`, [todayLocal()]
     );
     return done({ id: res.lastInsertRowId });
   });
@@ -891,50 +906,65 @@ export async function importPackingV1(batchId, jsonData) {
   if (plan.pos.length === 0) return fail('NO_SHIPMENTS');
   if (plan.lines.length === 0) return fail('ITEMS_EMPTY');
 
-  return db.withTransactionAsync(async () => {
+  return withTransaction(db, async () => {
+    // 1. Cập nhật thông tin file nguồn và mark (gộp tên nếu nạp thêm đơn khác)
+    const curBatch = await db.getFirstAsync(
+      `SELECT source_file, mark FROM order_batches WHERE id = ?`, [batchIdToUse]
+    );
+    const sfList = [curBatch?.source_file, plan.order.sourceFile].filter(Boolean);
+    const markList = [curBatch?.mark, plan.order.mark].filter(Boolean);
+    const newSourceFile = [...new Set(sfList.flatMap(s => String(s).split(', ')))].join(', ');
+    const newMark = [...new Set(markList.flatMap(m => String(m).split(', ')))].join(', ');
     await db.runAsync(
       `UPDATE order_batches SET source_file = ?, mark = ? WHERE id = ?`,
-      [plan.order.sourceFile, plan.order.mark, batchIdToUse]
+      [newSourceFile, newMark, batchIdToUse]
     );
-    // Xoá dữ liệu nhập cũ của đơn này để nạp lại không nhân đôi.
-    // `ON DELETE RESTRICT` ⇒ phải xoá kiện trước rồi tới dòng đơn hàng.
-    await db.runAsync(
-      `DELETE FROM pallets WHERE container_id IN (SELECT id FROM containers WHERE order_batch_id = ?)`,
-      [batchIdToUse]
-    );
-    await db.runAsync(`DELETE FROM containers WHERE order_batch_id = ?`, [batchIdToUse]);
-    // FEAT-22: `order_line_refs` khai báo `ON DELETE CASCADE` từ `order_lines` ⇒ câu xoá dưới đây
-    // đã xoá luôn số hiệu. **Cố ý không** thêm `DELETE FROM order_line_refs`: xoá tay rồi lại xoá
-    // ở trên là dư, và dễ lệch khi ai đó đổi `ON DELETE CASCADE` sau này.
-    await db.runAsync(
-      `DELETE FROM order_lines WHERE po_id IN (SELECT id FROM pos WHERE order_batch_id = ?)`,
-      [batchIdToUse]
-    );
-    await db.runAsync(`DELETE FROM item_refs WHERE order_batch_id = ?`, [batchIdToUse]);
-    await db.runAsync(`DELETE FROM pos WHERE order_batch_id = ?`, [batchIdToUse]);
 
+    // 2. Nối thêm hoặc cập nhật PO (pos) — không xoá các PO của các đơn khác đã nạp trước
     const posIds = [];
     for (const po of plan.pos) {
-      const r = await db.runAsync(
+      await db.runAsync(
         `INSERT INTO pos (order_batch_id, code, consignee, address, destination, invoice_no)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(order_batch_id, code) DO UPDATE SET
+           consignee = COALESCE(excluded.consignee, pos.consignee),
+           address = COALESCE(excluded.address, pos.address),
+           destination = COALESCE(excluded.destination, pos.destination),
+           invoice_no = COALESCE(excluded.invoice_no, pos.invoice_no)`,
         [batchIdToUse, po.code, po.consignee, po.address, po.destination, po.invoice_no]
       );
-      posIds.push(r.lastInsertRowId);
+      const row = await db.getFirstAsync(
+        `SELECT id FROM pos WHERE order_batch_id = ? AND code = ?`,
+        [batchIdToUse, po.code]
+      );
+      posIds.push(row.id);
     }
 
+    // 3. Nối thêm hoặc cập nhật dòng mã hàng (order_lines) — giữ nguyên id và nhật ký sản xuất
     const lineIds = [];
     const lineIdxByPosItem = new Map();
     for (const [i, l] of plan.lines.entries()) {
-      const r = await db.runAsync(
+      const poId = posIds[l.poIdx];
+      await db.runAsync(
         `INSERT INTO order_lines (po_id, item_code, target, nw_kg, gw_kg, volume_cbm, package_count)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [posIds[l.poIdx], l.itemCode, l.target, l.nw_kg, l.gw_kg, l.volume_cbm, l.package_count]
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(po_id, item_code) DO UPDATE SET
+           target = excluded.target,
+           nw_kg = COALESCE(excluded.nw_kg, order_lines.nw_kg),
+           gw_kg = COALESCE(excluded.gw_kg, order_lines.gw_kg),
+           volume_cbm = COALESCE(excluded.volume_cbm, order_lines.volume_cbm),
+           package_count = COALESCE(excluded.package_count, order_lines.package_count)`,
+        [poId, l.itemCode, l.target, l.nw_kg, l.gw_kg, l.volume_cbm, l.package_count]
       );
-      lineIds.push(r.lastInsertRowId);
+      const row = await db.getFirstAsync(
+        `SELECT id FROM order_lines WHERE po_id = ? AND item_code = ?`,
+        [poId, l.itemCode]
+      );
+      lineIds.push(row.id);
       lineIdxByPosItem.set(`${l.poIdx}\u0000${l.itemCode}`, i);
     }
 
+    // 4. Số hiệu nhà máy tổng quát (item_refs)
     for (const r of plan.refs) {
       await db.runAsync(
         `INSERT OR IGNORE INTO item_refs (order_batch_id, item_code, ref_no) VALUES (?, ?, ?)`,
@@ -942,27 +972,67 @@ export async function importPackingV1(batchId, jsonData) {
       );
     }
 
-    // FEAT-22: số hiệu của **riêng (PO × mã)**. `lineRefIdx` dựng từ chính `lineIds` vừa tạo nên
-    // không cần tra cứu lại DB — cùng thứ tự chỉ số mà `buildLinePlan` đã dùng.
+    // 5. Số hiệu nhà máy theo từng (PO × mã) (order_line_refs)
     for (const lr of plan.lineRefs) {
       const lineIdx = lineIdxByPosItem.get(`${lr.poIdx}\u0000${lr.itemCode}`);
-      // Dòng hàng không có trong `item_summary` ⇒ bỏ, không đoán (không ghi FK hỏng).
       if (lineIdx === undefined) continue;
       await db.runAsync(
-        `INSERT OR IGNORE INTO order_line_refs (order_line_id, ref_no, target) VALUES (?, ?, ?)`,
+        `INSERT INTO order_line_refs (order_line_id, ref_no, target) VALUES (?, ?, ?)
+         ON CONFLICT(order_line_id, ref_no) DO UPDATE SET target = excluded.target`,
         [lineIds[lineIdx], lr.refNo, lr.target]
       );
     }
 
+    // 6. Containers: Thêm mới hoặc làm mới kiện của chính container đó khi nạp lại
     const containerIds = [];
     for (const c of plan.containers) {
-      const r = await db.runAsync(
-        `INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`,
-        [batchIdToUse, posIds[c.poIdx], c.containerNo, c.sealNo]
+      const poId = posIds[c.poIdx];
+      const poCode = plan.pos[c.poIdx].code;
+      let containerNo = c.containerNo;
+
+      const existing = await db.getFirstAsync(
+        `SELECT id, po_id FROM containers WHERE order_batch_id = ? AND container_no = ?`,
+        [batchIdToUse, containerNo]
       );
-      containerIds.push(r.lastInsertRowId);
+
+      let cId;
+      if (existing) {
+        if (existing.po_id === poId) {
+          // Cùng PO (nạp lại đơn cũ): cập nhật seal_no và làm sạch kiện cũ của container này
+          if (c.sealNo) {
+            await db.runAsync(`UPDATE containers SET seal_no = ? WHERE id = ?`, [c.sealNo, existing.id]);
+          }
+          cId = existing.id;
+          await db.runAsync(`DELETE FROM pallets WHERE container_id = ?`, [cId]);
+        } else {
+          // Khác PO nhưng trùng tên container (ví dụ nhiều đơn đều dùng nhãn generic "Container 1")
+          containerNo = `${containerNo} (${poCode})`;
+          const existingAlt = await db.getFirstAsync(
+            `SELECT id FROM containers WHERE order_batch_id = ? AND container_no = ?`,
+            [batchIdToUse, containerNo]
+          );
+          if (existingAlt) {
+            cId = existingAlt.id;
+            await db.runAsync(`DELETE FROM pallets WHERE container_id = ?`, [cId]);
+          } else {
+            const r = await db.runAsync(
+              `INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`,
+              [batchIdToUse, poId, containerNo, c.sealNo]
+            );
+            cId = r.lastInsertRowId;
+          }
+        }
+      } else {
+        const r = await db.runAsync(
+          `INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`,
+          [batchIdToUse, poId, containerNo, c.sealNo]
+        );
+        cId = r.lastInsertRowId;
+      }
+      containerIds.push(cId);
     }
 
+    // 7. Kiện hàng (pallets) và dòng hàng trong kiện (pallet_lines)
     const palletIds = [];
     for (const p of plan.pallets) {
       const r = await db.runAsync(
@@ -982,9 +1052,25 @@ export async function importPackingV1(batchId, jsonData) {
       );
     }
 
+    const itemPoMap = new Map();
+    for (const l of plan.lines) {
+      const key = l.itemCode;
+      if (!itemPoMap.has(key)) itemPoMap.set(key, new Set());
+      itemPoMap.get(key).add(l.poIdx);
+    }
+    let multiPoItems = 0;
+    for (const pos of itemPoMap.values()) {
+      if (pos.size > 1) multiPoItems++;
+    }
+
     return done({
-      pos: plan.pos.length, lines: plan.lines.length,
-      containers: plan.containers.length, pallets: plan.pallets.length,
+      imported: plan.lines.length,
+      totalItems: plan.lines.length,
+      containers: plan.containers.length,
+      pallets: plan.pallets.length,
+      shipments: plan.pos.length,
+      poCount: plan.pos.length,
+      multiPoItems,
     });
   });
 }
