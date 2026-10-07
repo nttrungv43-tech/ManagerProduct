@@ -862,23 +862,20 @@ export async function deleteArchive(batchId) {
 /**
  * Hoàn tất đơn: archive đơn cũ + tạo đơn mới **trắng** (FEAT-14), trong MỘT transaction
  * (INV-B3). `AND status='active'` chống gọi song song (INV-B1).
- * @param {Array} containers - dữ liệu container/kiện của đơn đang active (để lưu vào batch archived)
  */
-export async function finishOrder(containers = []) {
+export async function finishOrder() {
   const db = await getDb();
   const active = await db.getFirstAsync(
-    `SELECT id, container_data FROM order_batches WHERE status = 'active' ORDER BY id DESC LIMIT 1`
+    `SELECT id FROM order_batches WHERE status = 'active' ORDER BY id DESC LIMIT 1`
   );
   if (!active) return fail('NO_ACTIVE_BATCH');
-  // Ưu tiên containers truyền vào (từ store), fallback container_data từ DB
-  const containerDataToSave = containers.length > 0 ? JSON.stringify(containers) : (active.container_data || '[]');
   return withTransaction(db, async () => {
     await db.runAsync(
-      `UPDATE order_batches SET status='archived', finished_date=?, container_data=? WHERE id = ? AND status='active'`,
-      [todayLocal(), containerDataToSave, active.id]
+      `UPDATE order_batches SET status='archived', finished_date=? WHERE id = ? AND status='active'`,
+      [todayLocal(), active.id]
     );
     const res = await db.runAsync(
-      `INSERT INTO order_batches (status, imported_at, container_data) VALUES ('active', ?, '[]')`, [todayLocal()]
+      `INSERT INTO order_batches (status, imported_at) VALUES ('active', ?)`, [todayLocal()]
     );
     return done({ id: res.lastInsertRowId });
   });

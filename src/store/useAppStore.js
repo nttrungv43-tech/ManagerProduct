@@ -187,13 +187,13 @@ export const useAppStore = create((set, get) => ({
    */
   finishOrder: async () => {
     if (get().finishing) return { ok: false, error: { code: 'BUSY' } };
-    const { containerData } = get();
     set({ finishing: true });
     try {
-      const res = await q.finishOrder(containerData);
+      const res = await q.finishOrder();
       if (!res.ok) return res;
       // FEAT-14: đơn mới luôn **trắng** ⇒ không nạp lại gì cả, chỉ đổi id.
       set({ batchId: res.id, items: [], poRows: [], containerData: [] });
+      await get().refreshArchives();
       set((s) => ({ dataVersion: s.dataVersion + 1 }));
       return { ok: true, batchId: res.id };
     } finally {
