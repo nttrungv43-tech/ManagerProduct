@@ -181,21 +181,35 @@ export const useAppStore = create((set, get) => ({
   },
 
   /**
-   * Hoàn tất đơn hàng (AC-CONT-07).
+   * Hoàn tất đơn hàng (AC-CONT-07, FEAT-24).
+   * Hỗ trợ hoàn tất toàn bộ hoặc một phần các PO được chọn (`poCodes`).
    * Cờ `finishing` chặn **gọi song song**: hai lần bấm "Xác nhận" liên tiếp sẽ tạo ra hai đơn
    * `active` ⇒ vi phạm INV-B1. Lần thứ hai trả `{ok:false, code:'BUSY'}` ngay.
+   *
+   * @param {string[]|null} [poCodes=null] - Danh sách mã PO cần hoàn tất.
    */
-  finishOrder: async () => {
+  finishOrder: async (poCodes = null) => {
     if (get().finishing) return { ok: false, error: { code: 'BUSY' } };
     set({ finishing: true });
     try {
-      const res = await q.finishOrder();
+      const res = await q.finishOrder(poCodes);
       if (!res.ok) return res;
-      // FEAT-14: đơn mới luôn **trắng** ⇒ không nạp lại gì cả, chỉ đổi id.
-      set({ batchId: res.id, items: [], poRows: [], containerData: [] });
-      await get().refreshArchives();
-      set((s) => ({ dataVersion: s.dataVersion + 1 }));
-      return { ok: true, batchId: res.id };
+      if (res.partial) {
+        // FEAT-24: Hoàn tất một phần PO → đơn active vẫn tiếp tục với các PO còn lại
+        await Promise.all([
+          get().refreshItems(),
+          get().refreshContainerData(),
+          get().refreshArchives(),
+        ]);
+        set((s) => ({ dataVersion: s.dataVersion + 1 }));
+        return { ok: true, batchId: res.id, partial: true, completedPos: res.completedPos };
+      } else {
+        // FEAT-14: đơn mới luôn **trắng** ⇒ không nạp lại gì cả, chỉ đổi id.
+        set({ batchId: res.id, items: [], poRows: [], containerData: [] });
+        await get().refreshArchives();
+        set((s) => ({ dataVersion: s.dataVersion + 1 }));
+        return { ok: true, batchId: res.id, partial: false };
+      }
     } finally {
       set({ finishing: false });
     }

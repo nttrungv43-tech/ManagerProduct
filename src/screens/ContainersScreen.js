@@ -1,5 +1,5 @@
 // src/screens/ContainersScreen.js
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore } from '@/store/useAppStore';
@@ -11,11 +11,12 @@ import ProgressBar from '@/components/ProgressBar';
 import PalletRow from '@/components/PalletRow';
 import ArchiveCard from '@/components/ArchiveCard';
 import PalletEditSheet from '@/components/PalletEditSheet';
+import FinishOrderModal from '@/components/FinishOrderModal';
 
 export default function ContainersScreen() {
   const theme = getTheme(useColorScheme());
   const {
-    items, togglePalletLine, finishOrder, archives, finishing, init,
+    items, poRows, togglePalletLine, finishOrder, archives, finishing, init,
     activeContainerFilter, setContainerFilter, containerData,
     addPallet, updatePallet, removePallet, deleteArchive, archivesBusy,
   } = useAppStore();
@@ -88,24 +89,92 @@ export default function ContainersScreen() {
     confirmDeleteArchive({ preview, onDelete: deleteArchive, alert: Alert });
   }
 
+  const [showFinishModal, setShowFinishModal] = useState(false);
+
+  // FEAT-24: Thống kê danh sách PO cho chức năng hoàn tất theo PO
+  const poListForFinish = useMemo(() => {
+    const map = new Map();
+
+    (poRows || []).forEach(r => {
+      const code = r?.po || r?.key || r?.label;
+      if (!code) return;
+      const codeStr = String(code);
+      map.set(codeStr, {
+        code: codeStr,
+        target: Number(r?.target) || 0,
+        produced: Number(r?.produced) || 0,
+        defect: Number(r?.defect) || 0,
+        palletsTotal: 0,
+        palletsDone: 0,
+      });
+    });
+
+    (containers || []).forEach(c => {
+      const poCode = c?.po;
+      if (!poCode) return;
+      const codeStr = String(poCode);
+      if (!map.has(codeStr)) {
+        map.set(codeStr, {
+          code: codeStr,
+          target: 0,
+          produced: 0,
+          defect: 0,
+          palletsTotal: 0,
+          palletsDone: 0,
+        });
+      }
+      const entry = map.get(codeStr);
+      (c?.pallets || []).forEach(p => {
+        entry.palletsTotal += 1;
+        if (palletDone(p)) {
+          entry.palletsDone += 1;
+        }
+      });
+    });
+
+    return Array.from(map.values())
+      .filter(p => Boolean(p.code))
+      .sort((a, b) => {
+        const numA = Number(a.code);
+        const numB = Number(b.code);
+        if (Number.isFinite(numA) && Number.isFinite(numB)) {
+          return numA - numB;
+        }
+        return String(a.code).localeCompare(String(b.code));
+      });
+  }, [poRows, containers]);
+
   function handleFinish() {
     if (finishing) return;
-    const message = done < total
-      ? `Mới đóng xong ${done}/${total} kiện trên tất cả container.\nBạn có chắc muốn hoàn tất đơn hàng và lưu trữ dữ liệu hiện tại không?`
-      : 'Xác nhận hoàn tất đơn hàng hiện tại?\nDữ liệu sẽ được lưu trữ lại và màn hình làm việc sẽ được dọn sạch để bắt đầu đơn mới.';
-    Alert.alert('Hoàn tất đơn hàng', message, [
-      { text: 'Huỷ', style: 'cancel' },
-      { text: 'Xác nhận', onPress: runFinish },
-    ]);
+    if (poListForFinish.length === 0) {
+      Alert.alert(
+        'Hoàn tất đơn hàng',
+        'Đơn hàng hiện tại không có mã PO nào. Bạn có muốn dọn màn hình để bắt đầu đơn mới?',
+        [
+          { text: 'Huỷ', style: 'cancel' },
+          { text: 'Xác nhận', onPress: () => runFinish(null) },
+        ]
+      );
+      return;
+    }
+    setShowFinishModal(true);
   }
 
-  async function runFinish() {
+  async function runFinish(selectedCodes) {
     try {
-      const res = await finishOrder();
+      const res = await finishOrder(selectedCodes);
       // BUSY = có lần hoàn tất khác đang chạy (chặn INV-B1) ⇒ coi như đã bỏ qua.
       if (res && res.ok === false && res.error?.code !== 'BUSY') {
         Alert.alert('Không hoàn tất được', 'Đơn hàng hiện tại đã được hoàn tất trước đó. Màn hình sẽ được tải lại.');
         init();
+        return;
+      }
+      setShowFinishModal(false);
+      if (res?.partial) {
+        Alert.alert(
+          'Đã lưu trữ',
+          `Đã hoàn tất và lưu trữ thành công ${(res.completedPos || []).length} mã PO: ${(res.completedPos || []).join(', ')}.\nCác PO còn lại vẫn tiếp tục được sản xuất trên màn hình.`
+        );
       }
     } catch (e) {
       // Transaction đã rollback ⇒ dữ liệu còn nguyên, chỉ cần báo lại cho người dùng.
@@ -202,7 +271,7 @@ export default function ContainersScreen() {
 
         <View style={[styles.finishBox, { backgroundColor: theme.card, borderColor: theme.ink }]}>
           <Text style={{ color: theme.sub, fontSize: 12, textAlign: 'center', marginBottom: 10 }}>
-            Khi đơn hàng hiện tại ({done}/{total} kiện) đã xong, bấm để lưu trữ toàn bộ dữ liệu và dọn màn hình cho đơn hàng mới.
+            Khi các mã PO hoặc đơn hàng ({done}/{total} kiện) đã xong, bấm để lựa chọn mã PO cần lưu trữ hoặc hoàn tất toàn bộ.
           </Text>
           <TouchableOpacity
             style={[styles.finishBtn, { backgroundColor: theme.bad, opacity: finishing ? 0.6 : 1 }]}
@@ -210,7 +279,7 @@ export default function ContainersScreen() {
             disabled={finishing}
           >
             <Text style={{ color: '#fff', fontWeight: '700' }}>
-              {finishing ? '⏳ Đang hoàn tất…' : '✅ Hoàn tất đơn hàng hiện tại'}
+              {finishing ? '⏳ Đang hoàn tất…' : '✅ Hoàn tất đơn hàng / chọn PO'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -259,6 +328,16 @@ export default function ContainersScreen() {
             theme={theme}
           />
         )}
+
+        <FinishOrderModal
+          key={showFinishModal ? 'open' : 'closed'}
+          visible={showFinishModal}
+          onClose={() => setShowFinishModal(false)}
+          onConfirm={runFinish}
+          poList={poListForFinish}
+          finishing={finishing}
+          theme={theme}
+        />
       </ScrollView>
     </SafeAreaView>
   );

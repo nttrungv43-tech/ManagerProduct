@@ -183,6 +183,7 @@ export async function fetchPoSummaries(batchId) {
   return rows.map(r => ({
     key: r.po,
     label: r.po,
+    po: r.po,
     target: num(r.target),
     produced: num(r.produced),
     remaining: num(r.remaining),
@@ -766,6 +767,7 @@ export async function fetchArchives() {
   const db = await getDb();
   const rows = await db.getAllAsync(
     `SELECT b.id, b.finished_date, b.source_file, b.mark,
+            (SELECT GROUP_CONCAT(p.code, ', ') FROM pos p WHERE p.order_batch_id = b.id) AS po_codes,
             (SELECT COUNT(*) FROM pos WHERE order_batch_id = b.id) AS po_count,
             (SELECT COUNT(DISTINCT l.item_code) FROM order_lines l
                JOIN pos p ON p.id = l.po_id WHERE p.order_batch_id = b.id) AS item_count,
@@ -790,6 +792,7 @@ export async function fetchArchives() {
     finished_date: r.finished_date,
     source_file: r.source_file,
     mark: r.mark,
+    po_codes: r.po_codes || '',
     po_count: num(r.po_count),
     item_count: num(r.item_count),
     total_target: num(r.total_target),
@@ -860,24 +863,101 @@ export async function deleteArchive(batchId) {
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
- * Hoàn tất đơn: archive đơn cũ + tạo đơn mới **trắng** (FEAT-14), trong MỘT transaction
- * (INV-B3). `AND status='active'` chống gọi song song (INV-B1).
+ * Hoàn tất đơn:
+ * - Nếu không truyền `poCodes` hoặc `poCodes` rỗng hoặc chứa toàn bộ các PO của đơn:
+ *   Archive toàn bộ đơn cũ + tạo đơn mới trắng (FEAT-14), trong MỘT transaction (INV-B3).
+ * - Nếu `poCodes` là danh sách một phần các PO:
+ *   Tạo một batch `archived` mới và chuyển các PO được chọn sang batch đó. Batch `active` hiện tại
+ *   vẫn giữ nguyên và tiếp tục với các PO còn lại (FEAT-24).
+ *
+ * @param {string[]|null} [poCodes=null] - Danh sách mã PO cần hoàn tất.
  */
-export async function finishOrder() {
+export async function finishOrder(poCodes = null) {
   const db = await getDb();
   const active = await db.getFirstAsync(
-    `SELECT id FROM order_batches WHERE status = 'active' ORDER BY id DESC LIMIT 1`
+    `SELECT id, source_file, mark FROM order_batches WHERE status = 'active' ORDER BY id DESC LIMIT 1`
   );
   if (!active) return fail('NO_ACTIVE_BATCH');
+
+  const allPos = await db.getAllAsync(
+    `SELECT id, code FROM pos WHERE order_batch_id = ?`,
+    [active.id]
+  );
+  if (allPos.length === 0) {
+    return withTransaction(db, async () => {
+      await db.runAsync(
+        `UPDATE order_batches SET status='archived', finished_date=? WHERE id = ? AND status='active'`,
+        [todayLocal(), active.id]
+      );
+      const res = await db.runAsync(
+        `INSERT INTO order_batches (status, imported_at) VALUES ('active', ?)`, [todayLocal()]
+      );
+      return done({ id: res.lastInsertRowId, partial: false });
+    });
+  }
+
+  const selectedCodes = Array.isArray(poCodes) ? poCodes.filter(Boolean) : null;
+  const isAll = !selectedCodes || selectedCodes.length === 0 || selectedCodes.length >= allPos.length;
+
+  if (isAll) {
+    return withTransaction(db, async () => {
+      await db.runAsync(
+        `UPDATE order_batches SET status='archived', finished_date=? WHERE id = ? AND status='active'`,
+        [todayLocal(), active.id]
+      );
+      const res = await db.runAsync(
+        `INSERT INTO order_batches (status, imported_at) VALUES ('active', ?)`, [todayLocal()]
+      );
+      return done({ id: res.lastInsertRowId, partial: false });
+    });
+  }
+
+  const selectedPos = allPos.filter(p => selectedCodes.includes(p.code));
+  if (selectedPos.length === 0) {
+    return fail('NO_MATCHING_POS');
+  }
+
   return withTransaction(db, async () => {
-    await db.runAsync(
-      `UPDATE order_batches SET status='archived', finished_date=? WHERE id = ? AND status='active'`,
-      [todayLocal(), active.id]
-    );
+    const today = todayLocal();
+    const poListStr = selectedPos.map(p => p.code).join(', ');
+    const newMark = active.mark ? `${active.mark} (${poListStr})` : `PO: ${poListStr}`;
+
     const res = await db.runAsync(
-      `INSERT INTO order_batches (status, imported_at) VALUES ('active', ?)`, [todayLocal()]
+      `INSERT INTO order_batches (status, finished_date, source_file, mark, imported_at)
+       VALUES ('archived', ?, ?, ?, ?)`,
+      [today, active.source_file || null, newMark, today]
     );
-    return done({ id: res.lastInsertRowId });
+    const archivedBatchId = res.lastInsertRowId;
+    const selectedPoIds = selectedPos.map(p => p.id);
+    const placeholders = selectedPoIds.map(() => '?').join(',');
+
+    // 1. Chuyển các PO được chọn sang batch archived
+    await db.runAsync(
+      `UPDATE pos SET order_batch_id = ? WHERE id IN (${placeholders})`,
+      [archivedBatchId, ...selectedPoIds]
+    );
+
+    // 2. Chuyển các container của các PO này sang batch archived
+    await db.runAsync(
+      `UPDATE containers SET order_batch_id = ? WHERE po_id IN (${placeholders})`,
+      [archivedBatchId, ...selectedPoIds]
+    );
+
+    // 3. Sao chép tra cứu item_refs tương ứng cho batch archived mới (nếu có)
+    await db.runAsync(
+      `INSERT OR IGNORE INTO item_refs (order_batch_id, item_code, ref_no)
+       SELECT ?, item_code, ref_no FROM item_refs
+       WHERE order_batch_id = ?
+         AND item_code IN (SELECT DISTINCT item_code FROM order_lines WHERE po_id IN (${placeholders}))`,
+      [archivedBatchId, active.id, ...selectedPoIds]
+    );
+
+    return done({
+      id: active.id,
+      archivedBatchId,
+      partial: true,
+      completedPos: selectedPos.map(p => p.code),
+    });
   });
 }
 

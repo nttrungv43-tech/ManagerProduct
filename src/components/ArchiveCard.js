@@ -42,6 +42,11 @@ export default function ArchiveCard({ archive, theme, expanded, onToggle, onDele
           <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 14.5 }}>
             Hoàn tất ngày {archive.finished_date}
           </Text>
+          {Boolean(archive.po_codes) && (
+            <Text style={{ color: theme.accent, fontSize: 12, fontWeight: '600', marginTop: 1 }}>
+              PO: {archive.po_codes}
+            </Text>
+          )}
           <Text style={{ color: theme.sub, fontSize: 11, marginTop: 2 }}>
             {archive.total_produced.toLocaleString()}/{archive.total_target.toLocaleString()} pcs ·{' '}
             {archive.pallets_done}/{archive.pallets_total} kiện · Lỗi {archive.total_defect.toLocaleString()}
