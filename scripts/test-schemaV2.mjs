@@ -176,6 +176,25 @@ console.log('3) Nhật ký sản xuất — mỗi dòng thuộc đúng MỘT PO 
       .run(one(db, `SELECT id FROM production_entries LIMIT 1`).id);
   } catch (e) { msg = e.message; }
   check('FK chặn trỏ tới dòng đơn hàng KHÔNG tồn tại', /FOREIGN KEY/i.test(msg), msg);
+
+  // Chi tiết lịch sử theo ngày: cộng dồn theo từng mã hàng (không sinh dòng mới)
+  const detailRows = db.prepare(
+    `SELECT MIN(pe.id) AS id,
+            pe.date,
+            COALESCE(SUM(pe.qty),0) AS qty,
+            COALESCE(SUM(pe.defect_qty),0) AS defect_qty,
+            ol.item_code AS ntk,
+            GROUP_CONCAT(DISTINCT p.code) AS po
+     FROM production_entries pe
+     JOIN order_lines ol ON ol.id = pe.order_line_id
+     JOIN pos p ON p.id = ol.po_id
+     WHERE pe.date = '2026-10-04'
+     GROUP BY ol.item_code
+     ORDER BY ol.item_code ASC`
+  ).all();
+  const gf = detailRows.find(r => r.ntk === '1072017GF');
+  eq('1072017GF (6 lần nhập) chỉ thành 1 dòng gộp duy nhất', detailRows.filter(r => r.ntk === '1072017GF').length, 1);
+  eq('1072017GF số lượng được cộng dồn đúng 600', Number(gf?.qty), 600);
 }
 
 // ══════════════════════════════════════════════════════════════════════

@@ -739,21 +739,34 @@ export async function fetchHistoryGrouped(groupBy, filterValue) {
   }));
 }
 
-/** Chi tiết một nhóm lịch sử — `ntk` đã kèm PO vì một mã có thể thuộc nhiều PO. */
+/** Chi tiết một nhóm lịch sử — gộp theo mã hàng (ntk), cộng dồn số lượng và lỗi. */
 export async function fetchHistoryDetail(groupBy, groupKey) {
   const db = await getDb();
   const expr = HISTORY_GROUP_EXPR[groupBy]?.('pe');
   if (!expr) return [];
-  return db.getAllAsync(
-    `SELECT pe.id, pe.date, pe.qty, pe.line, pe.defect_qty,
-            ol.item_code AS ntk, p.code AS po
+  const rows = await db.getAllAsync(
+    `SELECT MIN(pe.id) AS id,
+            pe.date,
+            COALESCE(SUM(pe.qty),0) AS qty,
+            COALESCE(SUM(pe.defect_qty),0) AS defect_qty,
+            ol.item_code AS ntk,
+            GROUP_CONCAT(DISTINCT p.code) AS po
      FROM production_entries pe
      JOIN order_lines ol ON ol.id = pe.order_line_id
      JOIN pos p ON p.id = ol.po_id
      WHERE ${expr} = ?
-     ORDER BY pe.date DESC, pe.id DESC`,
+     GROUP BY ol.item_code
+     ORDER BY ol.item_code ASC`,
     [groupKey]
   );
+  return rows.map(r => ({
+    id: r.id,
+    date: r.date,
+    qty: num(r.qty),
+    defect_qty: num(r.defect_qty),
+    ntk: r.ntk,
+    po: r.po,
+  }));
 }
 
 /**

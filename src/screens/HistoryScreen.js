@@ -1,6 +1,6 @@
 // src/screens/HistoryScreen.js
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, useColorScheme } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, useColorScheme, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore } from '@/store/useAppStore';
 import { getTheme } from '@/theme';
@@ -67,10 +67,10 @@ export default function HistoryScreen() {
             const rows = details[g.groupKey] || [];
             return (
               <View key={g.groupKey} style={[styles.card, { backgroundColor: theme.card, borderColor: theme.line }]}>
-                <View style={styles.top} onTouchEnd={() => toggleGroup(g.groupKey)}>
+                <TouchableOpacity style={styles.top} activeOpacity={0.7} onPress={() => toggleGroup(g.groupKey)}>
                   <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 15 }}>{labelFor(g.groupKey)}</Text>
                   <Text style={{ color: theme.accent, fontWeight: '700' }}>{g.total.toLocaleString()} pcs</Text>
-                </View>
+                </TouchableOpacity>
                 <View style={styles.numsRow}>
                   <Text style={{ color: theme.sub, fontSize: 12 }}>Thủ công: {g.manualTotal.toLocaleString()}</Text>
                   <Text style={{ color: theme.sub, fontSize: 12 }}>Tự động: {g.autoTotal.toLocaleString()}</Text>
@@ -81,12 +81,12 @@ export default function HistoryScreen() {
                     {rows.map((r, i) => (
                       <View key={i} style={[styles.row, { borderTopColor: theme.line }]}>
                         <Text style={{ color: theme.sub, fontSize: 12 }}>
-                          Mã {r.ntk}{historyGroup === 'day' ? ` — ${r.qty} pcs` : ''}
+                          Mã {r.ntk}{historyGroup === 'day' ? ` — ${r.qty.toLocaleString()} pcs` : ''}
                         </Text>
                         <Text style={{ color: theme.sub, fontSize: 12 }}>
                           {historyGroup === 'day'
-                            ? (r.defect_qty ? `Lỗi ${r.defect_qty}` : '')
-                            : `${r.qty.toLocaleString()} pcs${r.defect_qty ? ` · Lỗi ${r.defect_qty}` : ''}`}
+                            ? (r.defect_qty ? `Lỗi ${r.defect_qty.toLocaleString()}` : '')
+                            : `${r.qty.toLocaleString()} pcs${r.defect_qty ? ` · Lỗi ${r.defect_qty.toLocaleString()}` : ''}`}
                         </Text>
                       </View>
                     ))}
