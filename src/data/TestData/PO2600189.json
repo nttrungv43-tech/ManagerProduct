@@ -1,0 +1,579 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-06T21:54:18",
+  "shipment_list": [
+    {
+      "id": "i-loan-po2600189-1:2600189",
+      "batch_id": "i-loan-po2600189-1",
+      "source_file": "Đài Loan 装箱计划单 - PO2600189_1.xls",
+      "mark": "Đài Loan (10-11)",
+      "po_no": "2600189",
+      "destination": null,
+      "container_nos": [
+        "Container 1"
+      ],
+      "totals": {
+        "containers": 1,
+        "packages": 10,
+        "qty": 3540,
+        "nw_kg": 18216,
+        "gw_kg": 18466,
+        "volume_cbm": 11.48
+      },
+      "ok": true
+    }
+  ],
+  "batches": [
+    {
+      "id": "i-loan-po2600189-1",
+      "source_file": "Đài Loan 装箱计划单 - PO2600189_1.xls",
+      "mark": "Đài Loan (10-11)",
+      "po_range": null,
+      "shipments": [
+        {
+          "id": "i-loan-po2600189-1:2600189",
+          "po_no": "2600189",
+          "mark": "Đài Loan (10-11)",
+          "consignee": null,
+          "address": null,
+          "origin": "VIET NAM",
+          "destination": null,
+          "invoice_no": null,
+          "date": null,
+          "containers": [
+            {
+              "container_no": null,
+              "container_label": "Container 1",
+              "seal_no": null,
+              "container_index": 1,
+              "pallet_range": {
+                "from": 1,
+                "to": 10
+              },
+              "c_no": null,
+              "order_ref_label": "Ref No.",
+              "source_sheet": "Đài Loan (10-11)",
+              "packages": [
+                {
+                  "package_no": 1,
+                  "seq": 1,
+                  "po_no": "2600189",
+                  "is_mixed": false,
+                  "item_count": 1,
+                  "total_qty": 660,
+                  "nw_kg": 2059,
+                  "gw_kg": 2084,
+                  "length_m": 1.22,
+                  "width_m": 1.02,
+                  "height_m": 1.1232,
+                  "volume_cbm": 1.4,
+                  "items": [
+                    {
+                      "order_ref": null,
+                      "item_code": "1063022",
+                      "qty": 660,
+                      "nw_kg": 2059,
+                      "gw_kg": 2084,
+                      "height_m": 1.1232,
+                      "volume_cbm": 1.4,
+                      "id": "i-loan-po2600189-1:2600189:c1:1:1"
+                    }
+                  ],
+                  "id": "i-loan-po2600189-1:2600189:c1:1"
+                },
+                {
+                  "package_no": 2,
+                  "seq": 2,
+                  "po_no": "2600189",
+                  "is_mixed": true,
+                  "item_count": 2,
+                  "total_qty": 340,
+                  "nw_kg": 1490,
+                  "gw_kg": 1515,
+                  "length_m": 1.22,
+                  "width_m": 1.02,
+                  "height_m": 1.1108,
+                  "volume_cbm": 1.39,
+                  "items": [
+                    {
+                      "order_ref": null,
+                      "item_code": "106160",
+                      "qty": 300,
+                      "nw_kg": 1365,
+                      "gw_kg": 1390,
+                      "height_m": 1.05,
+                      "volume_cbm": 1.31,
+                      "id": "i-loan-po2600189-1:2600189:c1:2:1"
+                    },
+                    {
+                      "order_ref": null,
+                      "item_code": "1063022",
+                      "qty": 40,
+                      "nw_kg": 125,
+                      "gw_kg": 125,
+                      "height_m": 0.0608,
+                      "volume_cbm": 0.08,
+                      "id": "i-loan-po2600189-1:2600189:c1:2:2"
+                    }
+                  ],
+                  "id": "i-loan-po2600189-1:2600189:c1:2"
+                },
+                {
+                  "package_no": 3,
+                  "seq": 3,
+                  "po_no": "2600189",
+                  "is_mixed": true,
+                  "item_count": 2,
+                  "total_qty": 340,
+                  "nw_kg": 1718,
+                  "gw_kg": 1743,
+                  "length_m": 1.22,
+                  "width_m": 1.02,
+                  "height_m": 1.1108,
+                  "volume_cbm": 1.39,
+                  "items": [
+                    {
+                      "order_ref": null,
+                      "item_code": "106167",
+                      "qty": 300,
+                      "nw_kg": 1593,
+                      "gw_kg": 1618,
+                      "height_m": 1.05,
+                      "volume_cbm": 1.31,
+                      "id": "i-loan-po2600189-1:2600189:c1:3:1"
+                    },
+                    {
+                      "order_ref": null,
+                      "item_code": "1063022",
+                      "qty": 40,
+                      "nw_kg": 125,
+                      "gw_kg": 125,
+                      "height_m": 0.0608,
+                      "volume_cbm": 0.08,
+                      "id": "i-loan-po2600189-1:2600189:c1:3:2"
+                    }
+                  ],
+                  "id": "i-loan-po2600189-1:2600189:c1:3"
+                },
+                {
+                  "package_no": 4,
+                  "seq": 4,
+                  "po_no": "2600189",
+                  "is_mixed": true,
+                  "item_count": 2,
+                  "total_qty": 340,
+                  "nw_kg": 1718,
+                  "gw_kg": 1743,
+                  "length_m": 1.22,
+                  "width_m": 1.02,
+                  "height_m": 1.1108,
+                  "volume_cbm": 1.39,
+                  "items": [
+                    {
+                      "order_ref": null,
+                      "item_code": "106167",
+                      "qty": 300,
+                      "nw_kg": 1593,
+                      "gw_kg": 1618,
+                      "height_m": 1.05,
+                      "volume_cbm": 1.31,
+                      "id": "i-loan-po2600189-1:2600189:c1:4:1"
+                    },
+                    {
+                      "order_ref": null,
+                      "item_code": "1063022",
+                      "qty": 40,
+                      "nw_kg": 125,
+                      "gw_kg": 125,
+                      "height_m": 0.0608,
+                      "volume_cbm": 0.08,
+                      "id": "i-loan-po2600189-1:2600189:c1:4:2"
+                    }
+                  ],
+                  "id": "i-loan-po2600189-1:2600189:c1:4"
+                },
+                {
+                  "package_no": 5,
+                  "seq": 5,
+                  "po_no": "2600189",
+                  "is_mixed": true,
+                  "item_count": 3,
+                  "total_qty": 340,
+                  "nw_kg": 1588,
+                  "gw_kg": 1613,
+                  "length_m": 1.22,
+                  "width_m": 1.02,
+                  "height_m": 1.0297,
+                  "volume_cbm": 1.28,
+                  "items": [
+                    {
+                      "order_ref": null,
+                      "item_code": "1063049",
+                      "qty": 20,
+                      "nw_kg": 95,
+                      "gw_kg": 95,
+                      "height_m": 0.0669,
+                      "volume_cbm": 0.08,
+                      "id": "i-loan-po2600189-1:2600189:c1:5:1"
+                    },
+                    {
+                      "order_ref": null,
+                      "item_code": "1063051",
+                      "qty": 300,
+                      "nw_kg": 1431,
+                      "gw_kg": 1456,
+                      "height_m": 0.9324,
+                      "volume_cbm": 1.16,
+                      "id": "i-loan-po2600189-1:2600189:c1:5:2"
+                    },
+                    {
+                      "order_ref": null,
+                      "item_code": "1063022",
+                      "qty": 20,
+                      "nw_kg": 62,
+                      "gw_kg": 62,
+                      "height_m": 0.0304,
+                      "volume_cbm": 0.04,
+                      "id": "i-loan-po2600189-1:2600189:c1:5:3"
+                    }
+                  ],
+                  "id": "i-loan-po2600189-1:2600189:c1:5"
+                },
+                {
+                  "package_no": 6,
+                  "seq": 6,
+                  "po_no": "2600189",
+                  "is_mixed": false,
+                  "item_count": 1,
+                  "total_qty": 290,
+                  "nw_kg": 1908,
+                  "gw_kg": 1933,
+                  "length_m": 1.22,
+                  "width_m": 1.02,
+                  "height_m": 0.8387,
+                  "volume_cbm": 1.04,
+                  "items": [
+                    {
+                      "order_ref": null,
+                      "item_code": "1061119",
+                      "qty": 290,
+                      "nw_kg": 1908,
+                      "gw_kg": 1933,
+                      "height_m": 0.8387,
+                      "volume_cbm": 1.04,
+                      "id": "i-loan-po2600189-1:2600189:c1:6:1"
+                    }
+                  ],
+                  "id": "i-loan-po2600189-1:2600189:c1:6"
+                },
+                {
+                  "package_no": 7,
+                  "seq": 7,
+                  "po_no": "2600189",
+                  "is_mixed": false,
+                  "item_count": 1,
+                  "total_qty": 338,
+                  "nw_kg": 2096,
+                  "gw_kg": 2121,
+                  "length_m": 1.22,
+                  "width_m": 1.02,
+                  "height_m": 0.7411,
+                  "volume_cbm": 0.92,
+                  "items": [
+                    {
+                      "order_ref": null,
+                      "item_code": "1063038",
+                      "qty": 338,
+                      "nw_kg": 2096,
+                      "gw_kg": 2121,
+                      "height_m": 0.7411,
+                      "volume_cbm": 0.92,
+                      "id": "i-loan-po2600189-1:2600189:c1:7:1"
+                    }
+                  ],
+                  "id": "i-loan-po2600189-1:2600189:c1:7"
+                },
+                {
+                  "package_no": 8,
+                  "seq": 8,
+                  "po_no": "2600189",
+                  "is_mixed": false,
+                  "item_count": 1,
+                  "total_qty": 338,
+                  "nw_kg": 2096,
+                  "gw_kg": 2121,
+                  "length_m": 1.22,
+                  "width_m": 1.02,
+                  "height_m": 0.7411,
+                  "volume_cbm": 0.92,
+                  "items": [
+                    {
+                      "order_ref": null,
+                      "item_code": "1063038",
+                      "qty": 338,
+                      "nw_kg": 2096,
+                      "gw_kg": 2121,
+                      "height_m": 0.7411,
+                      "volume_cbm": 0.92,
+                      "id": "i-loan-po2600189-1:2600189:c1:8:1"
+                    }
+                  ],
+                  "id": "i-loan-po2600189-1:2600189:c1:8"
+                },
+                {
+                  "package_no": 9,
+                  "seq": 9,
+                  "po_no": "2600189",
+                  "is_mixed": false,
+                  "item_count": 1,
+                  "total_qty": 324,
+                  "nw_kg": 2015,
+                  "gw_kg": 2040,
+                  "length_m": 1.22,
+                  "width_m": 1.02,
+                  "height_m": 0.719,
+                  "volume_cbm": 0.89,
+                  "items": [
+                    {
+                      "order_ref": null,
+                      "item_code": "1063038",
+                      "qty": 324,
+                      "nw_kg": 2015,
+                      "gw_kg": 2040,
+                      "height_m": 0.719,
+                      "volume_cbm": 0.89,
+                      "id": "i-loan-po2600189-1:2600189:c1:9:1"
+                    }
+                  ],
+                  "id": "i-loan-po2600189-1:2600189:c1:9"
+                },
+                {
+                  "package_no": 10,
+                  "seq": 10,
+                  "po_no": "2600189",
+                  "is_mixed": true,
+                  "item_count": 2,
+                  "total_qty": 230,
+                  "nw_kg": 1528,
+                  "gw_kg": 1553,
+                  "length_m": 1.22,
+                  "width_m": 1.02,
+                  "height_m": 0.6955,
+                  "volume_cbm": 0.86,
+                  "items": [
+                    {
+                      "order_ref": null,
+                      "item_code": "1061119",
+                      "qty": 210,
+                      "nw_kg": 1382,
+                      "gw_kg": 1407,
+                      "height_m": 0.646,
+                      "volume_cbm": 0.8,
+                      "id": "i-loan-po2600189-1:2600189:c1:10:1"
+                    },
+                    {
+                      "order_ref": null,
+                      "item_code": "1063048",
+                      "qty": 20,
+                      "nw_kg": 146,
+                      "gw_kg": 146,
+                      "height_m": 0.0495,
+                      "volume_cbm": 0.06,
+                      "id": "i-loan-po2600189-1:2600189:c1:10:2"
+                    }
+                  ],
+                  "id": "i-loan-po2600189-1:2600189:c1:10"
+                }
+              ],
+              "computed": {
+                "packages": 10,
+                "qty": 3540,
+                "nw_kg": 18216,
+                "gw_kg": 18466,
+                "volume_cbm": 11.48
+              },
+              "declared": {},
+              "plan": {},
+              "item_summary": [
+                {
+                  "item_code": "1061119",
+                  "qty": 500,
+                  "nw_kg": 3290.0,
+                  "gw_kg": 3340.0,
+                  "volume_cbm": 1.84,
+                  "package_count": 2
+                },
+                {
+                  "item_code": "106160",
+                  "qty": 300,
+                  "nw_kg": 1365.0,
+                  "gw_kg": 1390.0,
+                  "volume_cbm": 1.31,
+                  "package_count": 1
+                },
+                {
+                  "item_code": "106167",
+                  "qty": 600,
+                  "nw_kg": 3186.0,
+                  "gw_kg": 3236.0,
+                  "volume_cbm": 2.62,
+                  "package_count": 2
+                },
+                {
+                  "item_code": "1063022",
+                  "qty": 800,
+                  "nw_kg": 2496.0,
+                  "gw_kg": 2521.0,
+                  "volume_cbm": 1.68,
+                  "package_count": 5
+                },
+                {
+                  "item_code": "1063038",
+                  "qty": 1000,
+                  "nw_kg": 6207.0,
+                  "gw_kg": 6282.0,
+                  "volume_cbm": 2.73,
+                  "package_count": 3
+                },
+                {
+                  "item_code": "1063048",
+                  "qty": 20,
+                  "nw_kg": 146.0,
+                  "gw_kg": 146.0,
+                  "volume_cbm": 0.06,
+                  "package_count": 1
+                },
+                {
+                  "item_code": "1063049",
+                  "qty": 20,
+                  "nw_kg": 95.0,
+                  "gw_kg": 95.0,
+                  "volume_cbm": 0.08,
+                  "package_count": 1
+                },
+                {
+                  "item_code": "1063051",
+                  "qty": 300,
+                  "nw_kg": 1431.0,
+                  "gw_kg": 1456.0,
+                  "volume_cbm": 1.16,
+                  "package_count": 1
+                }
+              ],
+              "checks": {
+                "ok": true,
+                "warnings": []
+              },
+              "id": "i-loan-po2600189-1:2600189:c1"
+            }
+          ],
+          "declared": {
+            "packages": 10,
+            "qty": 3540,
+            "nw_kg": 18216,
+            "gw_kg": 18466,
+            "volume_cbm": 11.48
+          },
+          "plan": {
+            "planned_qty": 3540,
+            "cancelled_qty": null,
+            "actual_qty": 3540,
+            "completion_rate": 1
+          },
+          "totals": {
+            "containers": 1,
+            "packages": 10,
+            "qty": 3540,
+            "nw_kg": 18216,
+            "gw_kg": 18466,
+            "volume_cbm": 11.48
+          },
+          "item_summary": [
+            {
+              "item_code": "1061119",
+              "qty": 500,
+              "nw_kg": 3290.0,
+              "gw_kg": 3340.0,
+              "volume_cbm": 1.84,
+              "package_count": 2
+            },
+            {
+              "item_code": "106160",
+              "qty": 300,
+              "nw_kg": 1365.0,
+              "gw_kg": 1390.0,
+              "volume_cbm": 1.31,
+              "package_count": 1
+            },
+            {
+              "item_code": "106167",
+              "qty": 600,
+              "nw_kg": 3186.0,
+              "gw_kg": 3236.0,
+              "volume_cbm": 2.62,
+              "package_count": 2
+            },
+            {
+              "item_code": "1063022",
+              "qty": 800,
+              "nw_kg": 2496.0,
+              "gw_kg": 2521.0,
+              "volume_cbm": 1.68,
+              "package_count": 5
+            },
+            {
+              "item_code": "1063038",
+              "qty": 1000,
+              "nw_kg": 6207.0,
+              "gw_kg": 6282.0,
+              "volume_cbm": 2.73,
+              "package_count": 3
+            },
+            {
+              "item_code": "1063048",
+              "qty": 20,
+              "nw_kg": 146.0,
+              "gw_kg": 146.0,
+              "volume_cbm": 0.06,
+              "package_count": 1
+            },
+            {
+              "item_code": "1063049",
+              "qty": 20,
+              "nw_kg": 95.0,
+              "gw_kg": 95.0,
+              "volume_cbm": 0.08,
+              "package_count": 1
+            },
+            {
+              "item_code": "1063051",
+              "qty": 300,
+              "nw_kg": 1431.0,
+              "gw_kg": 1456.0,
+              "volume_cbm": 1.16,
+              "package_count": 1
+            }
+          ],
+          "checks": {
+            "ok": true,
+            "warnings": []
+          },
+          "ok": true,
+          "batch_id": "i-loan-po2600189-1"
+        }
+      ],
+      "totals": {
+        "shipments": 1,
+        "containers": 1,
+        "packages": 10,
+        "qty": 3540,
+        "nw_kg": 18216,
+        "gw_kg": 18466,
+        "volume_cbm": 11.48
+      }
+    }
+  ],
+  "warnings": [
+    "Đài Loan 装箱计划单 - PO2600189_1.xls: không có sheet theo container, dùng sheet tổng 'Đài Loan (10-11)'"
+  ]
+}

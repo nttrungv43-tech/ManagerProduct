@@ -1030,21 +1030,51 @@ export async function importPackingV1(batchId, jsonData) {
       posIds.push(row.id);
     }
 
+    // 2b. Kiểm tra xem các container trong file nạp lần này có container nào là MỚI đối với từng PO không
+    // (phục vụ việc cộng dồn thông số khi nạp thêm container mới cho cùng PO)
+    const existingContainers = await db.getAllAsync(
+      `SELECT container_no, po_id FROM containers WHERE order_batch_id = ?`,
+      [batchIdToUse]
+    );
+    const existingContainerSet = new Set(
+      existingContainers.map(c => `${c.po_id}\u0000${c.container_no}`)
+    );
+
+    const poHasNewContainer = new Set();
+    for (const c of plan.containers) {
+      const poId = posIds[c.poIdx];
+      const poCode = plan.pos[c.poIdx].code;
+      const keyNormal = `${poId}\u0000${c.containerNo}`;
+      const keyAlt = `${poId}\u0000${c.containerNo} (${poCode})`;
+      const exists = existingContainerSet.has(keyNormal) || existingContainerSet.has(keyAlt);
+      if (!exists) {
+        poHasNewContainer.add(c.poIdx);
+      }
+    }
+
     // 3. Nối thêm hoặc cập nhật dòng mã hàng (order_lines) — giữ nguyên id và nhật ký sản xuất
     const lineIds = [];
     const lineIdxByPosItem = new Map();
     for (const [i, l] of plan.lines.entries()) {
       const poId = posIds[l.poIdx];
+      const isNew = poHasNewContainer.has(l.poIdx) ? 1 : 0;
       await db.runAsync(
         `INSERT INTO order_lines (po_id, item_code, target, nw_kg, gw_kg, volume_cbm, package_count)
          VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(po_id, item_code) DO UPDATE SET
-           target = excluded.target,
-           nw_kg = COALESCE(excluded.nw_kg, order_lines.nw_kg),
-           gw_kg = COALESCE(excluded.gw_kg, order_lines.gw_kg),
-           volume_cbm = COALESCE(excluded.volume_cbm, order_lines.volume_cbm),
-           package_count = COALESCE(excluded.package_count, order_lines.package_count)`,
-        [poId, l.itemCode, l.target, l.nw_kg, l.gw_kg, l.volume_cbm, l.package_count]
+           nw_kg = CASE
+             WHEN ? = 1 THEN COALESCE(order_lines.nw_kg, 0) + COALESCE(excluded.nw_kg, 0)
+             ELSE COALESCE(excluded.nw_kg, order_lines.nw_kg)
+           END,
+           gw_kg = CASE
+             WHEN ? = 1 THEN COALESCE(order_lines.gw_kg, 0) + COALESCE(excluded.gw_kg, 0)
+             ELSE COALESCE(excluded.gw_kg, order_lines.gw_kg)
+           END,
+           volume_cbm = CASE
+             WHEN ? = 1 THEN COALESCE(order_lines.volume_cbm, 0) + COALESCE(excluded.volume_cbm, 0)
+             ELSE COALESCE(excluded.volume_cbm, order_lines.volume_cbm)
+           END`,
+        [poId, l.itemCode, l.target, l.nw_kg, l.gw_kg, l.volume_cbm, l.package_count, isNew, isNew, isNew]
       );
       const row = await db.getFirstAsync(
         `SELECT id FROM order_lines WHERE po_id = ? AND item_code = ?`,
@@ -1066,10 +1096,15 @@ export async function importPackingV1(batchId, jsonData) {
     for (const lr of plan.lineRefs) {
       const lineIdx = lineIdxByPosItem.get(`${lr.poIdx}\u0000${lr.itemCode}`);
       if (lineIdx === undefined) continue;
+      const isNew = poHasNewContainer.has(lr.poIdx) ? 1 : 0;
       await db.runAsync(
         `INSERT INTO order_line_refs (order_line_id, ref_no, target) VALUES (?, ?, ?)
-         ON CONFLICT(order_line_id, ref_no) DO UPDATE SET target = excluded.target`,
-        [lineIds[lineIdx], lr.refNo, lr.target]
+         ON CONFLICT(order_line_id, ref_no) DO UPDATE SET
+           target = CASE
+             WHEN ? = 1 THEN order_line_refs.target + excluded.target
+             ELSE excluded.target
+           END`,
+        [lineIds[lineIdx], lr.refNo, lr.target, isNew]
       );
     }
 
@@ -1139,6 +1174,26 @@ export async function importPackingV1(batchId, jsonData) {
       await db.runAsync(
         `INSERT INTO pallet_lines (pallet_id, order_line_id, qty) VALUES (?, ?, ?)`,
         [palletIds[pl.palletIdx], lineIds[pl.lineIdx], pl.qty]
+      );
+    }
+
+    // 8. Đồng bộ số lượng kế hoạch (target) và số kiện (package_count) từ nguồn chân lý pallet_lines.
+    // Khi nạp nhiều container cho cùng một PO (hoặc nạp lại một container):
+    // pallet_lines luôn phản ánh đúng thực tế các kiện hàng trong tất cả các container của PO.
+    for (const poId of posIds) {
+      await db.runAsync(
+        `UPDATE order_lines
+         SET
+           target = COALESCE(
+             (SELECT SUM(qty) FROM pallet_lines WHERE order_line_id = order_lines.id),
+             target
+           ),
+           package_count = COALESCE(
+             (SELECT NULLIF(COUNT(DISTINCT pallet_id), 0) FROM pallet_lines WHERE order_line_id = order_lines.id),
+             package_count
+           )
+         WHERE po_id = ?`,
+        [poId]
       );
     }
 

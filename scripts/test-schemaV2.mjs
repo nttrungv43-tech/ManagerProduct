@@ -44,39 +44,135 @@ function freshDb() {
  * Lưu ý: `node:sqlite` trả `lastInsertRowid` (chữ **d** thường), còn `expo-sqlite` trả
  * `lastInsertRowId` (chữ **D**). Chỗ ghi thật sẽ dùng API của `expo-sqlite`; ở test chỉ cần id.
  */
-function applyPlan(d, p, importedAt = '2026-10-04') {
-  const b = d.prepare(
-    `INSERT INTO order_batches (status, source_file, mark, imported_at) VALUES ('active', ?, ?, ?)`
-  ).run(p.order.sourceFile, p.order.mark, importedAt);
-  const batchId = Number(b.lastInsertRowid);
+function applyPlan(d, p, importedAt = '2026-10-04', existingBatchId = null) {
+  let batchId = existingBatchId;
+  if (!batchId) {
+    const b = d.prepare(
+      `INSERT INTO order_batches (status, source_file, mark, imported_at) VALUES ('active', ?, ?, ?)`
+    ).run(p.order.sourceFile, p.order.mark, importedAt);
+    batchId = Number(b.lastInsertRowid);
+  }
 
   const insPo = d.prepare(
     `INSERT INTO pos (order_batch_id, code, consignee, address, destination, invoice_no)
-     VALUES (?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(order_batch_id, code) DO UPDATE SET
+       consignee = COALESCE(excluded.consignee, pos.consignee),
+       address = COALESCE(excluded.address, pos.address),
+       destination = COALESCE(excluded.destination, pos.destination),
+       invoice_no = COALESCE(excluded.invoice_no, pos.invoice_no)`
   );
-  const posIds = p.pos.map(po =>
-    Number(insPo.run(batchId, po.code, po.consignee, po.address, po.destination, po.invoice_no).lastInsertRowid));
+  const posIds = [];
+  for (const po of p.pos) {
+    insPo.run(batchId, po.code, po.consignee, po.address, po.destination, po.invoice_no);
+    const row = d.prepare(`SELECT id FROM pos WHERE order_batch_id = ? AND code = ?`).get(batchId, po.code);
+    posIds.push(row.id);
+  }
+
+  const existingContainers = d.prepare(
+    `SELECT container_no, po_id FROM containers WHERE order_batch_id = ?`
+  ).all(batchId);
+  const existingContainerSet = new Set(
+    existingContainers.map(c => `${c.po_id}\u0000${c.container_no}`)
+  );
+
+  const poHasNewContainer = new Set();
+  for (const c of p.containers) {
+    const poId = posIds[c.poIdx];
+    const poCode = p.pos[c.poIdx].code;
+    const keyNormal = `${poId}\u0000${c.containerNo}`;
+    const keyAlt = `${poId}\u0000${c.containerNo} (${poCode})`;
+    const exists = existingContainerSet.has(keyNormal) || existingContainerSet.has(keyAlt);
+    if (!exists) {
+      poHasNewContainer.add(c.poIdx);
+    }
+  }
 
   const insLine = d.prepare(
     `INSERT INTO order_lines (po_id, item_code, target, nw_kg, gw_kg, volume_cbm, package_count)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(po_id, item_code) DO UPDATE SET
+       nw_kg = CASE
+         WHEN ? = 1 THEN COALESCE(order_lines.nw_kg, 0) + COALESCE(excluded.nw_kg, 0)
+         ELSE COALESCE(excluded.nw_kg, order_lines.nw_kg)
+       END,
+       gw_kg = CASE
+         WHEN ? = 1 THEN COALESCE(order_lines.gw_kg, 0) + COALESCE(excluded.gw_kg, 0)
+         ELSE COALESCE(excluded.gw_kg, order_lines.gw_kg)
+       END,
+       volume_cbm = CASE
+         WHEN ? = 1 THEN COALESCE(order_lines.volume_cbm, 0) + COALESCE(excluded.volume_cbm, 0)
+         ELSE COALESCE(excluded.volume_cbm, order_lines.volume_cbm)
+       END`
   );
-  const lineIds = p.lines.map(l =>
-    Number(insLine.run(posIds[l.poIdx], l.itemCode, l.target, l.nw_kg, l.gw_kg, l.volume_cbm, l.package_count).lastInsertRowid));
+  const lineIds = [];
+  for (const l of p.lines) {
+    const poId = posIds[l.poIdx];
+    const isNew = poHasNewContainer.has(l.poIdx) ? 1 : 0;
+    insLine.run(poId, l.itemCode, l.target, l.nw_kg, l.gw_kg, l.volume_cbm, l.package_count, isNew, isNew, isNew);
+    const row = d.prepare(`SELECT id FROM order_lines WHERE po_id = ? AND item_code = ?`).get(poId, l.itemCode);
+    lineIds.push(row.id);
+  }
 
   const insRef = d.prepare(`INSERT OR IGNORE INTO item_refs (order_batch_id, item_code, ref_no) VALUES (?, ?, ?)`);
   for (const r of p.refs) insRef.run(batchId, r.itemCode, r.refNo);
 
-  const insLineRef = d.prepare(`INSERT OR IGNORE INTO order_line_refs (order_line_id, ref_no, target) VALUES (?, ?, ?)`);
+  const insLineRef = d.prepare(
+    `INSERT INTO order_line_refs (order_line_id, ref_no, target) VALUES (?, ?, ?)
+     ON CONFLICT(order_line_id, ref_no) DO UPDATE SET
+       target = CASE
+         WHEN ? = 1 THEN order_line_refs.target + excluded.target
+         ELSE excluded.target
+       END`
+  );
   for (const lr of p.lineRefs) {
     const li = p.lines.findIndex(l => l.poIdx === lr.poIdx && l.itemCode === lr.itemCode);
     if (li < 0) continue;
-    insLineRef.run(lineIds[li], lr.refNo, lr.target);
+    const isNew = poHasNewContainer.has(lr.poIdx) ? 1 : 0;
+    insLineRef.run(lineIds[li], lr.refNo, lr.target, isNew);
   }
 
-  const insCt = d.prepare(`INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`);
-  const containerIds = p.containers.map(c =>
-    Number(insCt.run(batchId, posIds[c.poIdx], c.containerNo, c.sealNo).lastInsertRowid));
+  const containerIds = [];
+  for (const c of p.containers) {
+    const poId = posIds[c.poIdx];
+    const poCode = p.pos[c.poIdx].code;
+    let containerNo = c.containerNo;
+
+    const existing = d.prepare(
+      `SELECT id, po_id FROM containers WHERE order_batch_id = ? AND container_no = ?`
+    ).get(batchId, containerNo);
+
+    let cId;
+    if (existing) {
+      if (existing.po_id === poId) {
+        if (c.sealNo) {
+          d.prepare(`UPDATE containers SET seal_no = ? WHERE id = ?`).run(c.sealNo, existing.id);
+        }
+        cId = existing.id;
+        d.prepare(`DELETE FROM pallets WHERE container_id = ?`).run(cId);
+      } else {
+        containerNo = `${containerNo} (${poCode})`;
+        const existingAlt = d.prepare(
+          `SELECT id FROM containers WHERE order_batch_id = ? AND container_no = ?`
+        ).get(batchId, containerNo);
+        if (existingAlt) {
+          cId = existingAlt.id;
+          d.prepare(`DELETE FROM pallets WHERE container_id = ?`).run(cId);
+        } else {
+          const r = d.prepare(
+            `INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`
+          ).run(batchId, poId, containerNo, c.sealNo);
+          cId = Number(r.lastInsertRowid);
+        }
+      }
+    } else {
+      const r = d.prepare(
+        `INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`
+      ).run(batchId, poId, containerNo, c.sealNo);
+      cId = Number(r.lastInsertRowid);
+    }
+    containerIds.push(cId);
+  }
 
   const insPal = d.prepare(
     `INSERT INTO pallets (container_id, po_id, pallet_no, c_no, is_mixed,
@@ -89,6 +185,22 @@ function applyPlan(d, p, importedAt = '2026-10-04') {
 
   const insPl = d.prepare(`INSERT INTO pallet_lines (pallet_id, order_line_id, qty) VALUES (?, ?, ?)`);
   for (const pl of p.palletLines) insPl.run(palletIds[pl.palletIdx], lineIds[pl.lineIdx], pl.qty);
+
+  for (const poId of posIds) {
+    d.prepare(
+      `UPDATE order_lines
+       SET
+         target = COALESCE(
+           (SELECT SUM(qty) FROM pallet_lines WHERE order_line_id = order_lines.id),
+           target
+         ),
+         package_count = COALESCE(
+           (SELECT NULLIF(COUNT(DISTINCT pallet_id), 0) FROM pallet_lines WHERE order_line_id = order_lines.id),
+           package_count
+         )
+       WHERE po_id = ?`
+    ).run(poId);
+  }
 
   return { batchId, posIds, lineIds, palletIds };
 }
@@ -656,6 +768,68 @@ console.log('\n11) Guard: REQUIRED_COLUMNS khớp CREATE_TABLES_SQL (BUGFIX-23)'
   }
   check('không cột NOT NULL không DEFAULT nào nằm trong danh sách vá tự động',
     risky.length === 0, risky.join(', '));
+}
+
+// ══════════════════════════════════════════════════════════════════════
+console.log('12) Nhập nhiều file cùng PO (PO2600168.json → PO2600189.json → Mix_Container.json) — cộng dồn kế hoạch & idempotent');
+// ══════════════════════════════════════════════════════════════════════
+{
+  const testDb = freshDb();
+  const f1 = JSON.parse(readFileSync(new URL('../src/data/TestData/PO2600168.json', import.meta.url), 'utf8'));
+  const f2 = JSON.parse(readFileSync(new URL('../src/data/TestData/PO2600189.json', import.meta.url), 'utf8'));
+  const f3 = JSON.parse(readFileSync(new URL('../src/data/TestData/Mix_Container.json', import.meta.url), 'utf8'));
+
+  const p1 = buildImportPlanV2(f1);
+  const p2 = buildImportPlanV2(f2);
+  const p3 = buildImportPlanV2(f3);
+
+  // 1. Nạp PO2600168.json
+  const { batchId } = applyPlan(testDb, p1);
+  eq('sau file 1: tổng target = 4050', one(testDb, 'SELECT SUM(target) s FROM order_lines').s, 4050);
+  eq('sau file 1: PO 2600168 = 4050', one(testDb, 'SELECT target FROM v_po_progress WHERE po = ?', '2600168')?.target, 4050);
+
+  // 2. Nạp PO2600189.json vào cùng batch
+  applyPlan(testDb, p2, '2026-10-04', batchId);
+  eq('sau file 2: tổng target = 7590 (4050 + 3540)', one(testDb, 'SELECT SUM(target) s FROM order_lines').s, 7590);
+  eq('sau file 2: PO 2600189 = 3540', one(testDb, 'SELECT target FROM v_po_progress WHERE po = ?', '2600189')?.target, 3540);
+
+  // 3. Nạp Mix_Container.json vào cùng batch (thêm Container 2 cho PO 2600168)
+  applyPlan(testDb, p3, '2026-10-04', batchId);
+  eq('sau file 3: tổng target = 10540 (đúng 7000 + 3540)', one(testDb, 'SELECT SUM(target) s FROM order_lines').s, 10540);
+  eq('sau file 3: PO 2600168 = 7000 (cộng dồn 4050 + 2950)', one(testDb, 'SELECT target FROM v_po_progress WHERE po = ?', '2600168')?.target, 7000);
+  eq('sau file 3: PO 2600189 = 3540', one(testDb, 'SELECT target FROM v_po_progress WHERE po = ?', '2600189')?.target, 3540);
+
+  // Từng mã trong PO 2600168:
+  const getLine = (code) => one(testDb, `
+    SELECT l.target, l.package_count FROM order_lines l
+    JOIN pos p ON p.id = l.po_id
+    WHERE p.code = '2600168' AND l.item_code = ?
+  `, code);
+
+  eq('1061119: 290 + 210 = 500 pcs', getLine('1061119')?.target, 500);
+  eq('1061119: 1 + 5 = 6 kiện', getLine('1061119')?.package_count, 6);
+  eq('106160: 300 + 500 = 800 pcs', getLine('106160')?.target, 800);
+  eq('106160: 1 + 2 = 3 kiện', getLine('106160')?.package_count, 3);
+  eq('1063022: 2000 pcs (chỉ có ở container 1)', getLine('1063022')?.target, 2000);
+  eq('1063038: 1200 + 300 = 1500 pcs', getLine('1063038')?.target, 1500);
+  eq('1063048: 1320 pcs (thêm mới từ container 2)', getLine('1063048')?.target, 1320);
+  eq('1063049: 200 + 280 = 480 pcs', getLine('1063049')?.target, 480);
+  eq('1063051: 60 + 340 = 400 pcs', getLine('1063051')?.target, 400);
+
+  eq('tổng số container = 3', one(testDb, 'SELECT COUNT(*) c FROM containers').c, 3);
+  eq('tổng số kiện = 30', one(testDb, 'SELECT COUNT(*) c FROM pallets').c, 30);
+
+  // 4. Re-import Mix_Container.json lần 2 (idempotent)
+  applyPlan(testDb, p3, '2026-10-04', batchId);
+  eq('re-import Mix_Container: tổng target VẪN LÀ 10540', one(testDb, 'SELECT SUM(target) s FROM order_lines').s, 10540);
+  eq('re-import Mix_Container: PO 2600168 VẪN LÀ 7000', one(testDb, 'SELECT target FROM v_po_progress WHERE po = ?', '2600168')?.target, 7000);
+  eq('re-import Mix_Container: tổng số kiện VẪN LÀ 30', one(testDb, 'SELECT COUNT(*) c FROM pallets').c, 30);
+
+  // 5. Re-import PO2600168.json lần 2 (idempotent)
+  applyPlan(testDb, p1, '2026-10-04', batchId);
+  eq('re-import PO2600168: tổng target VẪN LÀ 10540', one(testDb, 'SELECT SUM(target) s FROM order_lines').s, 10540);
+  eq('re-import PO2600168: PO 2600168 VẪN LÀ 7000', one(testDb, 'SELECT target FROM v_po_progress WHERE po = ?', '2600168')?.target, 7000);
+  eq('re-import PO2600168: tổng số kiện VẪN LÀ 30', one(testDb, 'SELECT COUNT(*) c FROM pallets').c, 30);
 }
 
 console.log(`\nKết quả: ${pass} passed, ${fail} failed`);
