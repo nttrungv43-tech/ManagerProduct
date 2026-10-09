@@ -7,10 +7,11 @@ import { getTheme } from '@/theme';
 import { fetchHistoryGrouped, fetchHistoryDetail } from '@/db/queries';
 import FilterChips from '@/components/FilterChips';
 import { formatDisplayDate } from '@/utils/date';
+import BackupRestoreSection from '@/components/BackupRestoreSection';
 
 export default function HistoryScreen() {
   const theme = getTheme(useColorScheme());
-  const { historyGroup, historyFilterValue, setHistoryGroup, dataVersion } = useAppStore();
+  const { historyGroup, historyFilterValue, setHistoryGroup, dataVersion, init } = useAppStore();
   const [groups, setGroups] = useState([]);
   const [details, setDetails] = useState({});
   const [expanded, setExpanded] = useState(new Set());
@@ -51,6 +52,10 @@ export default function HistoryScreen() {
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.bg }]} edges={['top']}>
       <ScrollView contentContainerStyle={styles.wrap}>
         <Text style={[styles.h1, { color: theme.ink }]}>📊 Lịch sử</Text>
+
+        {/* Chức năng sao lưu & phục hồi dữ liệu JSON toàn bộ app */}
+        <BackupRestoreSection theme={theme} onRestoreComplete={init} />
+
         <FilterChips
           options={[['day', 'Theo ngày'], ['month', 'Theo tháng'], ['year', 'Theo năm']]}
           activeValue={historyGroup}

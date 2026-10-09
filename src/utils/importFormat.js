@@ -21,6 +21,7 @@ export const NTK_RE = /^[0-9A-Za-z]+$/;
 export const FORMAT_ENTRIES = 'entries';
 export const FORMAT_PACKING_LIST = 'packingList';
 export const FORMAT_PACKING_V1 = 'packingListV1';
+export const FORMAT_BACKUP = 'backup';
 export const FORMAT_UNKNOWN = 'unknown';
 
 function isPlainObject(v) {
@@ -43,6 +44,7 @@ function findSummaryArray(data) {
 /** File `schema_version: 1` của tool ngoài. **FEAT-17:** app nhập thẳng được (không cần converter). */
 export function looksLikePackingV1(parsed) {
   if (!isPlainObject(parsed)) return false;
+  if (parsed.format === 'production_tracker_backup') return false;
   if (PACKING_V1_KEYS.some(k => Array.isArray(parsed[k]))) return true;
   return typeof parsed.schema_version === 'number';
 }
@@ -57,6 +59,9 @@ export function detectFormat(parsed) {
     return sample && sample.ntk && sample.date ? FORMAT_ENTRIES : FORMAT_UNKNOWN;
   }
   if (isPlainObject(parsed)) {
+    if (parsed.format === 'production_tracker_backup' || (parsed.schema_version && parsed.data?.order_batches)) {
+      return FORMAT_BACKUP;
+    }
     if (Array.isArray(parsed.entries)) return FORMAT_ENTRIES;
     if (looksLikePackingV1(parsed)) return FORMAT_PACKING_V1;
     if (findSummaryArray(parsed)) return FORMAT_PACKING_LIST;
@@ -128,6 +133,10 @@ export function estimateImportCount(parsed) {
 export function detectFormatError(parsed, fileName) {
   const fmt = detectFormat(parsed);
   const name = fileName ? `"${fileName}"` : 'file này';
+  if (fmt === FORMAT_BACKUP) {
+    return `${name} là file sao lưu toàn bộ dữ liệu ứng dụng.\n`
+      + 'Vui lòng sang tab "Lịch sử" và sử dụng chức năng "Phục hồi JSON" để khôi phục cơ sở dữ liệu.';
+  }
   if (fmt === FORMAT_UNKNOWN) {
     return 'File JSON không được nhận diện.\n'
       + 'Cần có mảng `entries` (nhật ký sản xuất) hoặc dữ liệu packing list (cot 總表 / Column4).';

@@ -121,6 +121,16 @@ const zmsg = detectFormatError(zeroValid, 'x.json');
 check('báo lỗi riêng cho 0 dòng hợp lệ', zmsg.includes('Column4') && zmsg.includes('Column6'));
 check('0 dòng hợp lệ KHÔNG bị gọi là định dạng mới', !zmsg.includes('convert:packing'));
 
+console.log('7) Nhận diện file sao lưu (FORMAT_BACKUP)');
+const sampleBackup = {
+  format: 'production_tracker_backup',
+  schema_version: 3,
+  data: { order_batches: [] },
+};
+eq('nhận diện đúng FORMAT_BACKUP', detectFormat(sampleBackup), 'backup');
+const backupMsg = detectFormatError(sampleBackup, 'backup.json');
+check('thông báo nhắc người dùng mở tab Lịch sử để phục hồi', backupMsg.includes('Lịch sử') && backupMsg.includes('Phục hồi JSON'));
+
 console.log(`\nKết quả: ${pass} passed, ${fail} failed`);
 if (failures.length) console.error('Các ca lỗi:\n - ' + failures.join('\n - '));
 process.exit(fail ? 1 : 0);

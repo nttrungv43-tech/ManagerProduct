@@ -24,6 +24,7 @@ import { getDb, getActiveBatchId } from './index';
 import { checkQtyLimit, parseQty } from '@/utils/validateQty';
 import { todayLocal } from '@/utils/date';
 import { buildImportPlanV2 } from '@/utils/packingV2Import';
+import { buildBackupPayload, validateBackupPayload } from '@/utils/backupFormat';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -1403,4 +1404,220 @@ export async function importItemsFromJson(batchId, jsonData) {
     n += r2.changes > 0 ? 1 : 1;
   }
   return done({ imported: n, total: rows.length, problems });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SAO LƯU & PHỤC HỒI DỮ LIỆU TOÀN BỘ ỨNG DỤNG (JSON)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Xuất toàn bộ cơ sở dữ liệu thành đối tượng sao lưu JSON hoàn chỉnh.
+ */
+export async function exportDatabaseBackup() {
+  const db = await getDb();
+  const [
+    order_batches,
+    pos,
+    order_lines,
+    item_refs,
+    order_line_refs,
+    production_entries,
+    production_defects,
+    production_entry_refs,
+    containers,
+    pallets,
+    pallet_lines,
+  ] = await Promise.all([
+    db.getAllAsync('SELECT * FROM order_batches ORDER BY id ASC'),
+    db.getAllAsync('SELECT * FROM pos ORDER BY id ASC'),
+    db.getAllAsync('SELECT * FROM order_lines ORDER BY id ASC'),
+    db.getAllAsync('SELECT * FROM item_refs ORDER BY id ASC'),
+    db.getAllAsync('SELECT * FROM order_line_refs ORDER BY order_line_id ASC, ref_no ASC'),
+    db.getAllAsync('SELECT * FROM production_entries ORDER BY id ASC'),
+    db.getAllAsync('SELECT * FROM production_defects ORDER BY entry_id ASC, type ASC'),
+    db.getAllAsync('SELECT * FROM production_entry_refs ORDER BY entry_id ASC'),
+    db.getAllAsync('SELECT * FROM containers ORDER BY id ASC'),
+    db.getAllAsync('SELECT * FROM pallets ORDER BY id ASC'),
+    db.getAllAsync('SELECT * FROM pallet_lines ORDER BY id ASC'),
+  ]);
+
+  return buildBackupPayload({
+    order_batches,
+    pos,
+    order_lines,
+    item_refs,
+    order_line_refs,
+    production_entries,
+    production_defects,
+    production_entry_refs,
+    containers,
+    pallets,
+    pallet_lines,
+  });
+}
+
+/**
+ * Phục hồi toàn bộ cơ sở dữ liệu từ file sao lưu JSON trong một transaction an toàn.
+ *
+ * @param {object} backupPayload - Dữ liệu sao lưu JSON
+ */
+export async function restoreDatabaseBackup(backupPayload) {
+  const validation = validateBackupPayload(backupPayload);
+  if (!validation.valid) {
+    return fail('INVALID_BACKUP', { message: validation.error });
+  }
+
+  const db = await getDb();
+  const { data } = validation;
+
+  return withTransaction(db, async () => {
+    // 1. Tạm tắt kiểm tra khoá ngoại để dọn dẹp và nạp dữ liệu an toàn
+    await db.execAsync('PRAGMA foreign_keys = OFF');
+
+    try {
+      // 2. Dọn sạch các bảng theo thứ tự quan hệ
+      await db.execAsync(
+        'DELETE FROM pallet_lines; ' +
+        'DELETE FROM pallets; ' +
+        'DELETE FROM containers; ' +
+        'DELETE FROM production_entry_refs; ' +
+        'DELETE FROM production_defects; ' +
+        'DELETE FROM production_entries; ' +
+        'DELETE FROM order_line_refs; ' +
+        'DELETE FROM item_refs; ' +
+        'DELETE FROM order_lines; ' +
+        'DELETE FROM pos; ' +
+        'DELETE FROM order_batches;'
+      );
+
+      // 3. Nạp lại order_batches (giữ nguyên ID)
+      for (const b of data.order_batches) {
+        await db.runAsync(
+          'INSERT INTO order_batches (id, status, finished_date, source_file, mark, imported_at) VALUES (?, ?, ?, ?, ?, ?)',
+          [b.id, b.status, b.finished_date ?? null, b.source_file ?? null, b.mark ?? null, b.imported_at]
+        );
+      }
+
+      // 4. Nạp lại pos (giữ nguyên ID)
+      for (const p of data.pos) {
+        await db.runAsync(
+          'INSERT INTO pos (id, order_batch_id, code, consignee, address, destination, invoice_no) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [p.id, p.order_batch_id, p.code, p.consignee ?? null, p.address ?? null, p.destination ?? null, p.invoice_no ?? null]
+        );
+      }
+
+      // 5. Nạp lại order_lines (giữ nguyên ID)
+      for (const l of data.order_lines) {
+        await db.runAsync(
+          'INSERT INTO order_lines (id, po_id, item_code, target, nw_kg, gw_kg, volume_cbm, package_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [l.id, l.po_id, l.item_code, l.target ?? 0, l.nw_kg ?? null, l.gw_kg ?? null, l.volume_cbm ?? null, l.package_count ?? null]
+        );
+      }
+
+      // 6. Nạp lại item_refs
+      for (const r of data.item_refs) {
+        await db.runAsync(
+          'INSERT INTO item_refs (id, order_batch_id, item_code, ref_no) VALUES (?, ?, ?, ?)',
+          [r.id, r.order_batch_id, r.item_code, r.ref_no]
+        );
+      }
+
+      // 7. Nạp lại order_line_refs
+      for (const olr of data.order_line_refs) {
+        await db.runAsync(
+          'INSERT INTO order_line_refs (order_line_id, ref_no, target) VALUES (?, ?, ?)',
+          [olr.order_line_id, olr.ref_no, olr.target ?? 0]
+        );
+      }
+
+      // 8. Nạp lại production_entries (giữ nguyên ID)
+      for (const pe of data.production_entries) {
+        await db.runAsync(
+          'INSERT INTO production_entries (id, order_line_id, date, qty, line, defect_qty) VALUES (?, ?, ?, ?, ?, ?)',
+          [pe.id, pe.order_line_id, pe.date, pe.qty, pe.line ?? 'manual', pe.defect_qty ?? 0]
+        );
+      }
+
+      // 9. Nạp lại production_defects
+      for (const pd of data.production_defects) {
+        await db.runAsync(
+          'INSERT INTO production_defects (entry_id, type) VALUES (?, ?)',
+          [pd.entry_id, pd.type]
+        );
+      }
+
+      // 10. Nạp lại production_entry_refs
+      for (const per of data.production_entry_refs) {
+        await db.runAsync(
+          'INSERT INTO production_entry_refs (entry_id, order_line_id, ref_no) VALUES (?, ?, ?)',
+          [per.entry_id, per.order_line_id, per.ref_no]
+        );
+      }
+
+      // 11. Nạp lại containers (giữ nguyên ID)
+      for (const c of data.containers) {
+        await db.runAsync(
+          'INSERT INTO containers (id, order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?, ?)',
+          [c.id, c.order_batch_id, c.po_id, c.container_no, c.seal_no ?? null]
+        );
+      }
+
+      // 12. Nạp lại pallets (giữ nguyên ID)
+      for (const p of data.pallets) {
+        await db.runAsync(
+          'INSERT INTO pallets (id, container_id, po_id, pallet_no, c_no, is_mixed, length_m, width_m, height_m, volume_cbm, nw_kg, gw_kg) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            p.id, p.container_id, p.po_id, p.pallet_no, p.c_no ?? null,
+            p.is_mixed ?? 0, p.length_m ?? null, p.width_m ?? null, p.height_m ?? null,
+            p.volume_cbm ?? null, p.nw_kg ?? null, p.gw_kg ?? null,
+          ]
+        );
+      }
+
+      // 13. Nạp lại pallet_lines (giữ nguyên ID)
+      for (const pl of data.pallet_lines) {
+        await db.runAsync(
+          'INSERT INTO pallet_lines (id, pallet_id, order_line_id, qty, done) VALUES (?, ?, ?, ?, ?)',
+          [pl.id, pl.pallet_id, pl.order_line_id, pl.qty ?? 0, pl.done ?? 0]
+        );
+      }
+
+      // 14. Bật lại foreign_keys và kiểm tra tính toàn vẹn tham chiếu
+      await db.execAsync('PRAGMA foreign_keys = ON');
+      const fkViolations = await db.getAllAsync('PRAGMA foreign_key_check');
+      if (fkViolations.length > 0) {
+        throw new Error('Dữ liệu sao lưu vi phạm ràng buộc khoá ngoại (' + fkViolations.length + ' lỗi liên kết).');
+      }
+
+      // 15. Bảo đảm bất biến INV-B1 (luôn có đúng 1 đơn active)
+      const actives = await db.getAllAsync('SELECT id FROM order_batches WHERE status = "active" ORDER BY id DESC');
+      if (actives.length === 0) {
+        await db.runAsync(
+          'INSERT INTO order_batches (status, imported_at) VALUES ("active", ?)',
+          [todayLocal()]
+        );
+      } else if (actives.length > 1) {
+        // Giữ đơn mới nhất làm active, các đơn còn lại đánh dấu archived
+        const stale = actives.slice(1);
+        for (const s of stale) {
+          await db.runAsync(
+            'UPDATE order_batches SET status = "archived", finished_date = COALESCE(finished_date, ?) WHERE id = ?',
+            [todayLocal(), s.id]
+          );
+        }
+      }
+
+      return done({
+        batches: data.order_batches.length,
+        pos: data.pos.length,
+        lines: data.order_lines.length,
+        entries: data.production_entries.length,
+        containers: data.containers.length,
+        pallets: data.pallets.length,
+      });
+    } catch (err) {
+      try { await db.execAsync('PRAGMA foreign_keys = ON'); } catch { /* ignore */ }
+      throw err;
+    }
+  });
 }

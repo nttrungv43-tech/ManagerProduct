@@ -312,6 +312,18 @@ export const useAppStore = create((set, get) => ({
     }
   },
 
+  exportBackup: async () => {
+    return q.exportDatabaseBackup();
+  },
+
+  restoreBackup: async (backupPayload) => {
+    const res = await q.restoreDatabaseBackup(backupPayload);
+    if (res && res.ok === false) return res;
+    await get().init();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return res;
+  },
+
   setFilter: (v) => set({ activeFilter: v }),
   setStatusFilter: (v) => set({ activeStatusFilter: v }),
   setContainerFilter: (v) => set({ activeContainerFilter: v }),
