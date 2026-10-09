@@ -673,6 +673,78 @@ export async function removePallet(batchId, containerId, palletNo) {
   return done({ no: palletNo });
 }
 
+/** Cập nhật thông tin container (tên container, số seal/chì). */
+export async function updateContainer(batchId, containerId, { container_no, seal_no }) {
+  const db = await getDb();
+  const cNo = String(container_no ?? '').trim();
+  if (!cNo) return fail('INVALID_CONTAINER_NO');
+
+  const sNo = seal_no !== undefined && seal_no !== null && String(seal_no).trim() !== ''
+    ? String(seal_no).trim()
+    : null;
+
+  const cur = await db.getFirstAsync(
+    `SELECT id, order_batch_id FROM containers WHERE id = ?`,
+    [containerId]
+  );
+  if (!cur) return fail('CONTAINER_NOT_FOUND');
+
+  // Kiểm tra trùng mã container trong cùng một đơn hàng
+  const dup = await db.getFirstAsync(
+    `SELECT id FROM containers WHERE order_batch_id = ? AND container_no = ? AND id != ?`,
+    [cur.order_batch_id, cNo, containerId]
+  );
+  if (dup) return fail('CONTAINER_EXISTS', { container_no: cNo });
+
+  await db.runAsync(
+    `UPDATE containers SET container_no = ?, seal_no = ? WHERE id = ?`,
+    [cNo, sNo, containerId]
+  );
+  return done({ id: containerId, container_no: cNo, seal_no: sNo });
+}
+
+/** Xoá một container (toàn bộ kiện trong container sẽ xoá theo — ON DELETE CASCADE). */
+export async function removeContainer(batchId, containerId) {
+  const db = await getDb();
+  const cur = await db.getFirstAsync(`SELECT id, container_no FROM containers WHERE id = ?`, [containerId]);
+  if (!cur) return fail('CONTAINER_NOT_FOUND');
+  await db.runAsync(`DELETE FROM containers WHERE id = ?`, [containerId]);
+  return done({ id: containerId, container_no: cur.container_no });
+}
+
+/** Thêm một container mới thuộc một PO. */
+export async function addContainer(batchId, poCode, { container_no, seal_no }) {
+  const db = await getDb();
+  const id = batchId ?? (await getActiveBatchId(db));
+  const cNo = String(container_no ?? '').trim();
+  if (!cNo) return fail('INVALID_CONTAINER_NO');
+  const code = String(poCode ?? '').trim();
+  if (!code) return fail('INVALID_PO');
+
+  const po = await db.getFirstAsync(
+    `SELECT id FROM pos WHERE order_batch_id = ? AND code = ?`,
+    [id, code]
+  );
+  if (!po) return fail('PO_NOT_FOUND', { po: code });
+
+  const dup = await db.getFirstAsync(
+    `SELECT id FROM containers WHERE order_batch_id = ? AND container_no = ?`,
+    [id, cNo]
+  );
+  if (dup) return fail('CONTAINER_EXISTS', { container_no: cNo });
+
+  const sNo = seal_no !== undefined && seal_no !== null && String(seal_no).trim() !== ''
+    ? String(seal_no).trim()
+    : null;
+
+  const res = await db.runAsync(
+    `INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`,
+    [id, po.id, cNo, sNo]
+  );
+  return done({ id: res.lastInsertRowId, container_no: cNo, seal_no: sNo, po: code });
+}
+
+
 function normalizePalletItems(items) {
   const list = Array.isArray(items) ? items : [];
   const out = [];

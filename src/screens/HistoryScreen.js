@@ -83,19 +83,26 @@ export default function HistoryScreen() {
                       const singleRef = (r.refs?.length === 1 && !r.unattributedQty) ? r.refs[0].refNo : null;
                       return (
                         <View key={r.orderLineId ?? i} style={[styles.itemBlock, { borderTopColor: theme.line }]}>
-                          {/* Dòng cha: PO · Mã hàng (kèm Ref nếu chỉ có 1 ref) */}
+                          {/* Dòng cha: Nổi bật Mã hàng và Số lượng, PO làm phụ */}
                           <View style={styles.row}>
-                            <Text style={{ color: theme.ink, fontSize: 12.5, fontWeight: '600', flex: 1, marginRight: 8 }}>
-                              PO {r.po} · Mã {r.ntk}{singleRef ? ` · Ref ${singleRef}` : ''}
-                            </Text>
-                            <Text style={{ color: theme.ink, fontSize: 12.5, fontWeight: '600' }}>
-                              {hasMultipleRefs ? 'Tổng ' : ''}{r.qty.toLocaleString()} pcs
+                            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', marginRight: 8 }}>
+                              <Text style={{ color: theme.ink, fontSize: 14, fontWeight: '700' }}>
+                                Mã {r.ntk}
+                              </Text>
+                              <Text style={{ color: theme.sub, fontSize: 11.5, marginLeft: 6 }}>
+                                (PO {r.po}{singleRef ? ` · Ref ${singleRef}` : ''})
+                              </Text>
+                            </View>
+                            <View style={{ alignItems: 'flex-end' }}>
+                              <Text style={{ color: theme.accent, fontSize: 13.5, fontWeight: '700' }}>
+                                {hasMultipleRefs ? 'Tổng ' : ''}{r.qty.toLocaleString()} pcs
+                              </Text>
                               {r.defect_qty ? (
-                                <Text style={{ color: theme.bad, fontWeight: '400' }}>
-                                  {` · Lỗi ${r.defect_qty.toLocaleString()}`}
+                                <Text style={{ color: theme.bad, fontSize: 11, fontWeight: '500', marginTop: 1 }}>
+                                  Lỗi: {r.defect_qty.toLocaleString()} pcs
                                 </Text>
                               ) : null}
-                            </Text>
+                            </View>
                           </View>
 
                           {/* Dòng con: phân tách chi tiết từng order_ref khi có nhiều ref */}

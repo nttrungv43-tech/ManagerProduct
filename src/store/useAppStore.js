@@ -164,6 +164,33 @@ export const useAppStore = create((set, get) => ({
     return { ok: true };
   },
 
+  // ---------- CONTAINERS CRUD (FEAT-25) ----------
+
+  updateContainer: async (containerId, payload) => {
+    const res = await q.updateContainer(get().batchId, containerId, payload);
+    if (res && res.ok === false) return res;
+    await get().refreshContainerData();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return { ok: true, ...res };
+  },
+
+  removeContainer: async (containerId) => {
+    const res = await q.removeContainer(get().batchId, containerId);
+    if (res && res.ok === false) return res;
+    await get().refreshContainerData();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return { ok: true, ...res };
+  },
+
+  addContainer: async (poCode, payload) => {
+    const res = await q.addContainer(get().batchId, poCode, payload);
+    if (res && res.ok === false) return res;
+    await get().refreshContainerData();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return { ok: true, ...res };
+  },
+
+
   /**
    * Bật/tắt một dòng hàng trong kiện.
    *

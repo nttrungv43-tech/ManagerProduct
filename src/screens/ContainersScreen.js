@@ -11,6 +11,7 @@ import ProgressBar from '@/components/ProgressBar';
 import PalletRow from '@/components/PalletRow';
 import ArchiveCard from '@/components/ArchiveCard';
 import PalletEditSheet from '@/components/PalletEditSheet';
+import ContainerEditSheet from '@/components/ContainerEditSheet';
 import FinishOrderModal from '@/components/FinishOrderModal';
 
 export default function ContainersScreen() {
@@ -19,6 +20,7 @@ export default function ContainersScreen() {
     items, poRows, togglePalletLine, finishOrder, archives, finishing, init,
     activeContainerFilter, setContainerFilter, containerData,
     addPallet, updatePallet, removePallet, deleteArchive, archivesBusy,
+    updateContainer, removeContainer, addContainer,
   } = useAppStore();
   const [expandedIds, setExpandedIds] = useState(new Set());
   // FEAT-15 (AC-ARCH-01/03): trạng thái mở nội dung của các thẻ đơn lưu trữ.
@@ -28,6 +30,8 @@ export default function ContainersScreen() {
   const [archivesOpen, setArchivesOpen] = useState({});
   // FEAT-10: form thêm/sửa kiện. `draftPallet` = null ⇒ đang thêm mới.
   const [draft, setDraft] = useState(null); // { containerId, label, pallet, nextNo }
+  // FEAT-25: form thêm/sửa container. `containerDraft` = null ⇒ đang đóng.
+  const [containerDraft, setContainerDraft] = useState(null); // { isAdd, container }
   // FEAT-21: `containerData` là cây từ bảng thật (`containers` → `pallets` → `pallet_lines`),
   // không phải blob JSON, và luôn là mảng ⇒ không còn fallback seed.
   const containers = containerData;
@@ -68,6 +72,24 @@ export default function ContainersScreen() {
   function openEditPallet(c, pallet) {
     setDraft({ containerId: c.id, label: c.container_no, pallet, nextNo: null });
   }
+
+  // FEAT-25: mở form sửa thông tin container (tên/mã container, số chì seal)
+  function openEditContainer(c) {
+    setContainerDraft({ isAdd: false, container: c });
+  }
+
+  // FEAT-25: mở form thêm container mới
+  function openAddContainer() {
+    setContainerDraft({ isAdd: true, container: null });
+  }
+
+  // FEAT-25: danh sách PO có sẵn để chọn khi tạo container mới
+  const poOptionsForContainer = useMemo(() => {
+    const fromPoRows = (poRows || []).map(r => r.po || r.key || r.label).filter(Boolean);
+    const set = new Set([...cpos, ...fromPoRows]);
+    return Array.from(set).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+  }, [cpos, poRows]);
+
 
   // FEAT-15: chạm mũi tên trên thẻ đơn lưu trữ. Nếu đang ở chế độ "thu gọn tất cả"
   // thì chuyển sang điều khiển từng thẻ và mở đúng thẻ vừa chạm (AC-ARCH-03).
@@ -185,7 +207,15 @@ export default function ContainersScreen() {
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.bg }]} edges={['top']}>
       <ScrollView contentContainerStyle={styles.wrap}>
-        <Text style={[styles.h1, { color: theme.ink }]}>📦 Container</Text>
+        <View style={styles.headerRow}>
+          <Text style={[styles.h1, { color: theme.ink }]}>📦 Container</Text>
+          <TouchableOpacity
+            style={[styles.addContainerBtn, { borderColor: theme.line, backgroundColor: theme.card }]}
+            onPress={openAddContainer}
+          >
+            <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>＋ Thêm container</Text>
+          </TouchableOpacity>
+        </View>
         {/* FEAT-14 (AC-CONT-09): chip lọc PO chỉ có nghĩa khi đã có container. */}
         {containers.length > 0 && (
           <FilterChips
@@ -228,15 +258,27 @@ export default function ContainersScreen() {
 
           return (
             <View key={c.id} style={[styles.card, { backgroundColor: theme.card, borderColor: theme.line }]}>
-              <TouchableOpacity style={styles.top} onPress={() => toggleExpand(c.id)}>
-                <View>
+              <View style={styles.top}>
+                <TouchableOpacity style={{ flex: 1, paddingVertical: 2 }} onPress={() => toggleExpand(c.id)}>
                   <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 16 }}>📦 {c.container_no}</Text>
-                  <Text style={{ color: theme.sub, fontSize: 11.5, marginTop: 2 }}>PO {c.po}</Text>
+                  <Text style={{ color: theme.sub, fontSize: 11.5, marginTop: 2 }}>
+                    PO {c.po}{c.seal_no ? ` · Seal: ${c.seal_no}` : ''}
+                  </Text>
+                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <TouchableOpacity
+                    style={[styles.editContBtn, { borderColor: theme.line, backgroundColor: theme.bg }]}
+                    onPress={() => openEditContainer(c)}
+                  >
+                    <Text style={{ color: theme.accent, fontWeight: '600', fontSize: 12 }}>✏️ Sửa</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => toggleExpand(c.id)} style={{ paddingVertical: 4 }}>
+                    <Text style={{ color: isFull ? theme.good : theme.ink, fontWeight: '700', fontSize: 13.5 }}>
+                      {cDone}/{c.pallets.length} kiện {isOpen ? '▴' : '▾'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
-                <Text style={{ color: isFull ? theme.good : theme.ink, fontWeight: '700' }}>
-                  {cDone}/{c.pallets.length} kiện {isOpen ? '▴' : '▾'}
-                </Text>
-              </TouchableOpacity>
+              </View>
               <ProgressBar pct={pct} color={isFull ? theme.good : theme.accent} theme={theme} />
               <View style={styles.numsRow}>
                 <Text style={{ color: theme.sub, fontSize: 12 }}>{pct}% số kiện</Text>
@@ -329,6 +371,30 @@ export default function ContainersScreen() {
           />
         )}
 
+        {/* FEAT-25: Modal chỉnh sửa / thêm mới container */}
+        {containerDraft && (
+          <ContainerEditSheet
+            container={containerDraft.container}
+            poOptions={poOptionsForContainer}
+            onClose={() => setContainerDraft(null)}
+            onSubmit={async (payload) => {
+              if (containerDraft.isAdd) {
+                return addContainer(payload.po, {
+                  container_no: payload.container_no,
+                  seal_no: payload.seal_no,
+                });
+              } else {
+                return updateContainer(containerDraft.container.id, {
+                  container_no: payload.container_no,
+                  seal_no: payload.seal_no,
+                });
+              }
+            }}
+            onDelete={containerDraft.container ? () => removeContainer(containerDraft.container.id) : undefined}
+            theme={theme}
+          />
+        )}
+
         <FinishOrderModal
           key={showFinishModal ? 'open' : 'closed'}
           visible={showFinishModal}
@@ -346,9 +412,12 @@ export default function ContainersScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   wrap: { padding: 14, paddingBottom: 40 },
-  h1: { fontSize: 19, fontWeight: '700', marginBottom: 4 },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  h1: { fontSize: 19, fontWeight: '700' },
+  addContainerBtn: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
   card: { borderWidth: 1.5, borderRadius: 6, padding: 14, marginBottom: 10 },
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  editContBtn: { borderWidth: 1, borderRadius: 5, paddingHorizontal: 8, paddingVertical: 4 },
   numsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 9 },
   emptyBox: { borderWidth: 1.5, borderRadius: 6, padding: 14, marginTop: 8, marginBottom: 10 },
   finishBox: { borderWidth: 1.5, borderStyle: 'dashed', borderRadius: 6, padding: 14, marginVertical: 16 },

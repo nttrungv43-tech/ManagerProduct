@@ -52,9 +52,21 @@ export default function PalletRow({
   const palletNo = pallet.pallet_no ?? pallet.no;
 
   if (pallet.items.length > 1) {
+    const allDone = pallet.items.length > 0 && pallet.items.every(it => it.done);
     return (
       <View style={[styles.row, { borderTopColor: theme.line }]}>
-        <Text style={[styles.title, { color: theme.ink }]}>Kiện {palletNo} — {qty} pcs ({pallet.items.length} loại hàng)</Text>
+        <Text
+          style={[
+            styles.title,
+            {
+              color: allDone ? theme.good : theme.ink,
+              textDecorationLine: allDone ? 'line-through' : 'none',
+              opacity: allDone ? 0.8 : 1,
+            },
+          ]}
+        >
+          Kiện {palletNo} — {qty} pcs ({pallet.items.length} loại hàng)
+        </Text>
         <View style={{ marginTop: 6, gap: 6 }}>
           {pallet.items.map(it => (
             <TouchableOpacity
@@ -62,10 +74,26 @@ export default function PalletRow({
               style={styles.subRow}
               onPress={() => confirmToggle(it, `loại hàng ${it.ntk}`)}
             >
-              <View style={[styles.checkSm, { borderColor: theme.line, backgroundColor: it.done ? theme.good : theme.bg }]}>
+              <View
+                style={[
+                  styles.checkSm,
+                  {
+                    borderColor: it.done ? theme.good : theme.line,
+                    backgroundColor: it.done ? theme.good : theme.bg,
+                  },
+                ]}
+              >
                 {it.done && <Text style={{ color: '#fff', fontSize: 11 }}>✓</Text>}
               </View>
-              <Text style={{ color: it.done ? theme.good : theme.sub, fontSize: 12, textDecorationLine: it.done ? 'line-through' : 'none' }}>
+              <Text
+                style={{
+                  color: it.done ? theme.good : theme.ink,
+                  fontSize: 12,
+                  fontWeight: it.done ? '400' : '500',
+                  textDecorationLine: it.done ? 'line-through' : 'none',
+                  opacity: it.done ? 0.8 : 1,
+                }}
+              >
                 {it.ntk} × {it.qty}
               </Text>
             </TouchableOpacity>
@@ -88,12 +116,41 @@ export default function PalletRow({
         onPress={() => line && confirmToggle(line, `kiện ${palletNo}`)}
       >
         <View style={styles.palletHeader}>
-          <View style={[styles.checkLg, { borderColor: theme.ink, backgroundColor: done ? theme.good : theme.bg }]}>
+          <View
+            style={[
+              styles.checkLg,
+              {
+                borderColor: done ? theme.good : theme.ink,
+                backgroundColor: done ? theme.good : theme.bg,
+              },
+            ]}
+          >
             {done && <Text style={{ color: '#fff' }}>✓</Text>}
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.title, { color: done ? theme.good : theme.ink }]}>Kiện {palletNo} — {qty} pcs</Text>
-            <Text style={{ color: theme.sub, fontSize: 11.5, marginTop: 2 }}>{itemsTxt}</Text>
+            <Text
+              style={[
+                styles.title,
+                {
+                  color: done ? theme.good : theme.ink,
+                  textDecorationLine: done ? 'line-through' : 'none',
+                  opacity: done ? 0.8 : 1,
+                },
+              ]}
+            >
+              Kiện {palletNo} — {qty} pcs
+            </Text>
+            <Text
+              style={{
+                color: done ? theme.good : theme.sub,
+                fontSize: 11.5,
+                marginTop: 2,
+                textDecorationLine: done ? 'line-through' : 'none',
+                opacity: done ? 0.8 : 1,
+              }}
+            >
+              {itemsTxt}
+            </Text>
           </View>
         </View>
       </TouchableOpacity>
