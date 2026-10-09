@@ -739,34 +739,55 @@ export async function fetchHistoryGrouped(groupBy, filterValue) {
   }));
 }
 
-/** Chi tiết một nhóm lịch sử — gộp theo mã hàng (ntk), cộng dồn số lượng và lỗi. */
+/** Chi tiết một nhóm lịch sử — gom theo (PO × Mã hàng), tách nhánh cha-con nếu có nhiều order_ref. */
 export async function fetchHistoryDetail(groupBy, groupKey) {
   const db = await getDb();
   const expr = HISTORY_GROUP_EXPR[groupBy]?.('pe');
   if (!expr) return [];
   const rows = await db.getAllAsync(
-    `SELECT MIN(pe.id) AS id,
-            pe.date,
-            COALESCE(SUM(pe.qty),0) AS qty,
-            COALESCE(SUM(pe.defect_qty),0) AS defect_qty,
+    `SELECT ol.id AS order_line_id,
+            p.code AS po,
             ol.item_code AS ntk,
-            GROUP_CONCAT(DISTINCT p.code) AS po
+            er.ref_no,
+            COALESCE(SUM(pe.qty), 0) AS qty,
+            COALESCE(SUM(pe.defect_qty), 0) AS defect_qty
      FROM production_entries pe
      JOIN order_lines ol ON ol.id = pe.order_line_id
      JOIN pos p ON p.id = ol.po_id
+     LEFT JOIN production_entry_refs er ON er.entry_id = pe.id
      WHERE ${expr} = ?
-     GROUP BY ol.item_code
-     ORDER BY ol.item_code ASC`,
+     GROUP BY ol.id, er.ref_no
+     ORDER BY p.code ASC, ol.item_code ASC, er.ref_no ASC`,
     [groupKey]
   );
-  return rows.map(r => ({
-    id: r.id,
-    date: r.date,
-    qty: num(r.qty),
-    defect_qty: num(r.defect_qty),
-    ntk: r.ntk,
-    po: r.po,
-  }));
+
+  const grouped = new Map();
+  for (const r of rows) {
+    if (!grouped.has(r.order_line_id)) {
+      grouped.set(r.order_line_id, {
+        id: r.order_line_id,
+        orderLineId: r.order_line_id,
+        po: r.po,
+        ntk: r.ntk,
+        qty: 0,
+        defect_qty: 0,
+        refs: [],
+        unattributedQty: 0,
+      });
+    }
+    const item = grouped.get(r.order_line_id);
+    const q = num(r.qty);
+    const dq = num(r.defect_qty);
+    item.qty += q;
+    item.defect_qty += dq;
+    if (r.ref_no) {
+      item.refs.push({ refNo: r.ref_no, qty: q, defect_qty: dq });
+    } else {
+      item.unattributedQty += q;
+    }
+  }
+
+  return [...grouped.values()];
 }
 
 /**

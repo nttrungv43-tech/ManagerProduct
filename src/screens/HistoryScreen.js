@@ -78,18 +78,55 @@ export default function HistoryScreen() {
                 </View>
                 {isOpen && (
                   <View style={{ marginTop: 8 }}>
-                    {rows.map((r, i) => (
-                      <View key={i} style={[styles.row, { borderTopColor: theme.line }]}>
-                        <Text style={{ color: theme.sub, fontSize: 12 }}>
-                          Mã {r.ntk}{historyGroup === 'day' ? ` — ${r.qty.toLocaleString()} pcs` : ''}
-                        </Text>
-                        <Text style={{ color: theme.sub, fontSize: 12 }}>
-                          {historyGroup === 'day'
-                            ? (r.defect_qty ? `Lỗi ${r.defect_qty.toLocaleString()}` : '')
-                            : `${r.qty.toLocaleString()} pcs${r.defect_qty ? ` · Lỗi ${r.defect_qty.toLocaleString()}` : ''}`}
-                        </Text>
-                      </View>
-                    ))}
+                    {rows.map((r, i) => {
+                      const hasMultipleRefs = (r.refs?.length > 1) || (r.refs?.length === 1 && r.unattributedQty > 0);
+                      const singleRef = (r.refs?.length === 1 && !r.unattributedQty) ? r.refs[0].refNo : null;
+                      return (
+                        <View key={r.orderLineId ?? i} style={[styles.itemBlock, { borderTopColor: theme.line }]}>
+                          {/* Dòng cha: PO · Mã hàng (kèm Ref nếu chỉ có 1 ref) */}
+                          <View style={styles.row}>
+                            <Text style={{ color: theme.ink, fontSize: 12.5, fontWeight: '600', flex: 1, marginRight: 8 }}>
+                              PO {r.po} · Mã {r.ntk}{singleRef ? ` · Ref ${singleRef}` : ''}
+                            </Text>
+                            <Text style={{ color: theme.ink, fontSize: 12.5, fontWeight: '600' }}>
+                              {hasMultipleRefs ? 'Tổng ' : ''}{r.qty.toLocaleString()} pcs
+                              {r.defect_qty ? (
+                                <Text style={{ color: theme.bad, fontWeight: '400' }}>
+                                  {` · Lỗi ${r.defect_qty.toLocaleString()}`}
+                                </Text>
+                              ) : null}
+                            </Text>
+                          </View>
+
+                          {/* Dòng con: phân tách chi tiết từng order_ref khi có nhiều ref */}
+                          {hasMultipleRefs && (
+                            <View style={styles.subList}>
+                              {r.refs.map((rf, rfIdx) => (
+                                <View key={rfIdx} style={styles.subRow}>
+                                  <Text style={{ color: theme.sub, fontSize: 11.5, paddingLeft: 8 }}>
+                                    ↳ Ref {rf.refNo}
+                                  </Text>
+                                  <Text style={{ color: theme.sub, fontSize: 11.5 }}>
+                                    {rf.qty.toLocaleString()} pcs
+                                    {rf.defect_qty ? ` · Lỗi ${rf.defect_qty.toLocaleString()}` : ''}
+                                  </Text>
+                                </View>
+                              ))}
+                              {r.unattributedQty > 0 && (
+                                <View style={styles.subRow}>
+                                  <Text style={{ color: theme.sub, fontSize: 11.5, paddingLeft: 8 }}>
+                                    ↳ Chưa gắn số hiệu
+                                  </Text>
+                                  <Text style={{ color: theme.sub, fontSize: 11.5 }}>
+                                    {r.unattributedQty.toLocaleString()} pcs
+                                  </Text>
+                                </View>
+                              )}
+                            </View>
+                          )}
+                        </View>
+                      );
+                    })}
                   </View>
                 )}
               </View>
@@ -108,5 +145,8 @@ const styles = StyleSheet.create({
   card: { borderWidth: 1.5, borderRadius: 6, padding: 14, marginBottom: 10 },
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
   numsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 8 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderTopWidth: 1 },
+  itemBlock: { paddingVertical: 6, borderTopWidth: 1 },
+  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  subList: { marginTop: 3, paddingLeft: 6 },
+  subRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 2 },
 });
