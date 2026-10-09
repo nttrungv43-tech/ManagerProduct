@@ -40,3 +40,17 @@ export function isDateString(value) {
     date.getDate() === Number(d)
   );
 }
+
+/**
+ * Chuyển ngày từ định dạng ISO `YYYY-MM-DD` sang `DD-MM-YYYY` để hiển thị cho người dùng.
+ * Nếu chuỗi không đúng định dạng `YYYY-MM-DD`, trả về chuỗi gốc.
+ * @param {string} dateStr
+ * @returns {string}
+ */
+export function formatDisplayDate(dateStr) {
+  if (typeof dateStr !== 'string') return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
+  if (!m) return dateStr;
+  const [, y, mo, d] = m;
+  return `${d}-${mo}-${y}`;
+}

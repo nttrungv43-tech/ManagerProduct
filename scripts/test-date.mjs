@@ -4,7 +4,7 @@
 //
 // Vì sao cần test: `toISOString()` trả ngày theo **UTC**. Ở UTC+7 (Việt Nam),
 // 00:00–06:59 sáng là ngày hôm trước theo UTC ⇒ ngày nhật ký/ngày hoàn tất đơn bị sai.
-import { todayLocal, isDateString } from '../src/utils/date.js';
+import { todayLocal, isDateString, formatDisplayDate } from '../src/utils/date.js';
 
 let pass = 0;
 let fail = 0;
@@ -65,6 +65,16 @@ check('thiếu phần', isDateString('2026-09') === false);
 check('thừa phần', isDateString('2026-09-02T00:00') === false);
 check('số', isDateString(20260902) === false);
 check('null', isDateString(null) === false);
+
+// ---------- 5. formatDisplayDate (dd-mm-yyyy) ----------
+console.log('5) formatDisplayDate');
+eq('định dạng ngày chuẩn yyyy-mm-dd -> dd-mm-yyyy', formatDisplayDate('2026-10-09'), '09-10-2026');
+eq('ngày và tháng 1 chữ số có số 0 dẫn đầu', formatDisplayDate('2026-01-05'), '05-01-2026');
+eq('cuối năm 31-12', formatDisplayDate('2026-12-31'), '31-12-2026');
+eq('có khoảng trắng thừa được trim', formatDisplayDate(' 2026-08-15 '), '15-08-2026');
+eq('chuỗi không phải ngày thì giữ nguyên', formatDisplayDate('invalid-date'), 'invalid-date');
+eq('chuỗi rỗng trả về rỗng', formatDisplayDate(''), '');
+eq('null/undefined an toàn', formatDisplayDate(null), '');
 
 console.log('\nKết quả: ' + `${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

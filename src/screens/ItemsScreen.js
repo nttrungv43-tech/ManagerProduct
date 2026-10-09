@@ -21,6 +21,7 @@ export default function ItemsScreen() {
     items, poRows, addEntry, updateEntry, removeEntry, setFilter, setStatusFilter, setSearchQuery,
     importFromJson, addItem, updateItem, removeItem,
     previewDeleteByPo, removeItemsByPo,
+    lastUpdatedInfo, setLastUpdatedInfo,
   } = state;
   // FEAT-10: form thêm/sửa mã hàng. `draftItem` = null ⇒ đang thêm mới.
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -167,6 +168,9 @@ export default function ItemsScreen() {
               key={row.order_line_id}
               item={row}
               theme={theme}
+              isLastUpdated={lastUpdatedInfo?.orderLineId === row.order_line_id}
+              lastUpdatedInfo={lastUpdatedInfo?.orderLineId === row.order_line_id ? lastUpdatedInfo : null}
+              onSetLastUpdated={setLastUpdatedInfo}
               onAddEntry={addEntry}
               onUpdateEntry={updateEntry}
               onDeleteEntry={removeEntry}

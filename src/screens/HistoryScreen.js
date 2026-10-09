@@ -6,6 +6,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { getTheme } from '@/theme';
 import { fetchHistoryGrouped, fetchHistoryDetail } from '@/db/queries';
 import FilterChips from '@/components/FilterChips';
+import { formatDisplayDate } from '@/utils/date';
 
 export default function HistoryScreen() {
   const theme = getTheme(useColorScheme());
@@ -43,7 +44,7 @@ export default function HistoryScreen() {
       return `Tháng ${m}/${y}`;
     }
     if (historyGroup === 'year') return `Năm ${groupKey}`;
-    return groupKey;
+    return formatDisplayDate(groupKey);
   }
 
   return (

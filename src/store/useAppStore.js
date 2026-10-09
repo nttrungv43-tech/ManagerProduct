@@ -38,6 +38,10 @@ export const useAppStore = create((set, get) => ({
   finishing: false,
   // Đang chạy `deleteArchive` — khoá nút `🗑` chống xoá hai đơn cùng lúc (FEAT-15, RC-98).
   archivesBusy: false,
+  // FEAT-26: Thông tin thẻ mã hàng vừa được cập nhật gần nhất
+  lastUpdatedInfo: null,
+  setLastUpdatedInfo: (info) => set({ lastUpdatedInfo: info }),
+
 
   init: async () => {
     const db = await getDb();
@@ -80,6 +84,17 @@ export const useAppStore = create((set, get) => ({
   addEntry: async (orderLineId, payload) => {
     const res = await q.addEntry(orderLineId, payload);
     if (res && res.ok === false) return res;
+    const now = new Date();
+    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    set({
+      lastUpdatedInfo: {
+        orderLineId,
+        qty: payload?.qty,
+        refNo: payload?.refNo,
+        time: timeStr,
+        timestamp: Date.now(),
+      },
+    });
     await get().refreshItems();
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
     return { ok: true };

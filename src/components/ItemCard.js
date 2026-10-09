@@ -1,6 +1,5 @@
-// src/components/ItemCard.js
-import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import React, { useState, useRef } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Keyboard } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import ProgressBar from '@/components/ProgressBar';
 import EntryLogRow from '@/components/EntryLogRow';
@@ -16,7 +15,7 @@ import { confirmDeleteItem } from '@/utils/deleteItem';
 import { todayLocal } from '@/utils/date';
 // FEAT-22: số hiệu nhà máy (`order_ref`) của **riêng PO × mã** này. Logic định dạng nằm ở util
 // thuần để test được bằng `node`, component chỉ render.
-import { refLabel, refLines, normalizeRefProgress, refProgressText, unattributedText, formatRefOverLimit }
+import { refLabel, refLines, normalizeRefProgress, unattributedText, formatRefOverLimit }
   from '@/utils/refFormat';
 
 const COLOR_BY_CLASS = { ok: 'good', mid: 'warn', low: 'bad' };
@@ -73,13 +72,27 @@ const REF_KEY_PREFIX = 'refQty:';
  * con số hiển thị đều là của riêng PO đó — không cần cảnh báo nữa.
  */
 
-// FEAT-11: `onDeleteItem` là prop TUỲ CHỌN — không truyền thì nút xoá không hiện (AC-EDIT-35).
-export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDeleteEntry, onEditItem, onDeleteItem }) {
+export default function ItemCard({
+  item,
+  theme,
+  isLastUpdated = false,
+  lastUpdatedInfo = null,
+  onSetLastUpdated,
+  onAddEntry,
+  onUpdateEntry,
+  onDeleteEntry,
+  onEditItem,
+  onDeleteItem,
+}) {
   const [expanded, setExpanded] = useState(false);
   const [qty, setQty] = useState('');
   const [line, setLine] = useState('manual');
   const [defectQty, setDefectQty] = useState('');
   const [defectTypes, setDefectTypes] = useState({ yellow: false, red: false, tear: false });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submittingRef, setSubmittingRef] = useState(null);
+  const qtyInputRef = useRef(null);
+  const defectQtyInputRef = useRef(null);
   const [logOpen, setLogOpen] = useState(false);
   const [entries, setEntries] = useState([]);
   const [editingId, setEditingId] = useState(null);
@@ -181,30 +194,49 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
       return;
     }
 
-    const types = Object.keys(refDefectTypes[key] || {}).filter(k => refDefectTypes[key][k]);
-    const lineVal = refLine[key] || 'manual';
+    setSubmittingRef(refNo);
+    try {
+      const types = Object.keys(refDefectTypes[key] || {}).filter(k => refDefectTypes[key][k]);
+      const lineVal = refLine[key] || 'manual';
 
-    const res = await onAddEntry(item.order_line_id, {
-      date: todayLocal(),
-      qty: q,
-      line: lineVal,
-      defectQty: dq,
-      defectTypes: dq > 0 ? types : [],
-      refNo,
-    });
-    if (res && res.ok === false) {
-      const refMsg = formatRefOverLimit(res.error);
-      Alert.alert(
-        refMsg ? 'Vượt kế hoạch số hiệu' : OVER_TARGET_TITLE,
-        refMsg || formatQtyError(res.error, item.ntk)
-      );
-      return;
+      const res = await onAddEntry(item.order_line_id, {
+        date: todayLocal(),
+        qty: q,
+        line: lineVal,
+        defectQty: dq,
+        defectTypes: dq > 0 ? types : [],
+        refNo,
+      });
+      if (res && res.ok === false) {
+        const refMsg = formatRefOverLimit(res.error);
+        Alert.alert(
+          refMsg ? 'Vượt kế hoạch số hiệu' : OVER_TARGET_TITLE,
+          refMsg || formatQtyError(res.error, item.ntk)
+        );
+        return;
+      }
+      // Xử lý xong: ô nhập liệu trở về trạng thái trống như ban đầu
+      setRefQtyFor(refNo, '');
+      setRefDefectQtyFor(refNo, '');
+      setRefDefectTypesFor(refNo, { yellow: false, red: false, tear: false });
+      Keyboard.dismiss();
+
+      const now = new Date();
+      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      onSetLastUpdated?.({
+        orderLineId: item.order_line_id,
+        ntk: item.ntk,
+        po: item.po,
+        qty: q,
+        refNo,
+        time: timeStr,
+      });
+      loadEntries();
+    } catch (err) {
+      Alert.alert('Lỗi', err?.message || 'Không thể thêm sản lượng');
+    } finally {
+      setSubmittingRef(null);
     }
-    // Clear inputs
-    setRefQtyFor(refNo, '');
-    setRefDefectQtyFor(refNo, '');
-    setRefDefectTypesFor(refNo, {});
-    loadEntries();
   }
 
 
@@ -222,16 +254,39 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
       return;
     }
 
-    const types = Object.keys(defectTypes).filter(k => defectTypes[k]);
-    const res = await onAddEntry(item.order_line_id, {
-      date: todayLocal(),
-      qty: q, line, defectQty: dq, defectTypes: dq > 0 ? types : [],
-    });
-    // Vượt đơn đặt hàng: giữ nguyên ô nhập để người dùng sửa lại.
-    if (res && res.ok === false) { showOverTarget(res.error); return; }
-    setQty(''); setDefectQty(''); setDefectTypes({ yellow: false, red: false, tear: false });
-    setLogOpen(true);
-    loadEntries();
+    setIsSubmitting(true);
+    try {
+      const types = Object.keys(defectTypes).filter(k => defectTypes[k]);
+      const res = await onAddEntry(item.order_line_id, {
+        date: todayLocal(),
+        qty: q, line, defectQty: dq, defectTypes: dq > 0 ? types : [],
+      });
+      // Vượt đơn đặt hàng: giữ nguyên ô nhập để người dùng sửa lại.
+      if (res && res.ok === false) { showOverTarget(res.error); return; }
+      // Xử lý xong: ô nhập liệu trở về trạng thái trống như ban đầu
+      setQty('');
+      setDefectQty('');
+      setDefectTypes({ yellow: false, red: false, tear: false });
+      qtyInputRef.current?.blur();
+      defectQtyInputRef.current?.blur();
+      Keyboard.dismiss();
+
+      const now = new Date();
+      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      onSetLastUpdated?.({
+        orderLineId: item.order_line_id,
+        ntk: item.ntk,
+        po: item.po,
+        qty: q,
+        time: timeStr,
+      });
+      setLogOpen(true);
+      loadEntries();
+    } catch (err) {
+      Alert.alert('Lỗi', err?.message || 'Không thể thêm sản lượng');
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   function confirmDelete(entryId) {
@@ -289,6 +344,16 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
           const res = await onUpdateEntry(editingId, payload);
           // Vượt hạn mức: giữ form sửa mở để người dùng điều chỉnh (AC-ITEM-18).
           if (res && res.ok === false) { showOverTarget(res.error); return; }
+          const now = new Date();
+          const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+          onSetLastUpdated?.({
+            orderLineId: item.order_line_id,
+            ntk: item.ntk,
+            po: item.po,
+            qty: q,
+            time: timeStr,
+            isEdit: true,
+          });
           handleEditCancel();
           loadEntries();
         },
@@ -297,14 +362,58 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
   }
 
   return (
-    <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.line }]}>
+    <View
+      style={[
+        styles.card,
+        {
+          backgroundColor: theme.card,
+          borderColor: isLastUpdated ? theme.good : theme.line,
+          borderWidth: isLastUpdated ? 2.5 : 1.5,
+        },
+      ]}
+    >
+      {/* FEAT-26: Huy hiệu nhận diện thẻ vừa được cập nhật số liệu */}
+      {isLastUpdated && (
+        <View
+          style={[
+            styles.lastUpdatedBanner,
+            {
+              backgroundColor: theme.good + '18',
+              borderColor: theme.good,
+            },
+          ]}
+        >
+          <View style={styles.lastUpdatedRow}>
+            <Text style={[styles.lastUpdatedTitle, { color: theme.good }]}>
+              ⚡ VỪA CẬP NHẬT (PO {item.po})
+            </Text>
+            {lastUpdatedInfo?.time ? (
+              <Text style={{ color: theme.good, fontSize: 11.5, fontWeight: '700' }}>
+                lúc {lastUpdatedInfo.time}
+              </Text>
+            ) : null}
+          </View>
+          {lastUpdatedInfo?.qty ? (
+            <Text style={{ color: theme.ink, fontSize: 12, marginTop: 2 }}>
+              Đã ghi nhận: <Text style={{ fontWeight: '700', color: theme.good }}>+{lastUpdatedInfo.qty.toLocaleString()} pcs</Text>
+              {lastUpdatedInfo?.refNo ? ` · Ref ${lastUpdatedInfo.refNo}` : ''}
+            </Text>
+          ) : null}
+        </View>
+      )}
+
       <TouchableOpacity style={styles.top} onPress={() => setExpanded(!expanded)}>
-        <View>
-          <Text style={[styles.title, { color: theme.ink }]}>Mã {item.ntk}</Text>
-          <Text style={styles.poText(theme)}>PO {item.po}</Text>
+        <View style={{ flex: 1, marginRight: 8 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+            <Text style={[styles.title, { color: theme.ink }]}>Mã {item.ntk}</Text>
+            <View style={[styles.poBadge, { backgroundColor: theme.accent + '22', borderColor: theme.accent }]}>
+              <Text style={[styles.poBadgeText, { color: theme.accent }]}>PO {item.po}</Text>
+            </View>
+          </View>
         </View>
         <Text style={styles.pctText(theme, pctColor)}>{pct}% {expanded ? '▴' : '▾'}</Text>
       </TouchableOpacity>
+
 
       <ProgressBar pct={pct} color={pctColor} theme={theme} />
 
@@ -370,10 +479,17 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
           {!hasRefs && (
             <>
               <Text style={styles.sectionLabel(theme)}>Nhập sản xuất hôm nay</Text>
-              {/* FEAT-20: nói rõ nhật ký sẽ được ghi cho PO nào — người dùng không phải đoán. */}
-              <Text style={[styles.hint, { color: theme.sub }]}>Ghi cho PO {item.po}</Text>
+              <View style={[styles.poNoticeBanner, { backgroundColor: theme.bg, borderColor: theme.line }]}>
+                <Text style={{ color: theme.sub, fontSize: 12 }}>
+                  Đang nhập cho: <Text style={{ color: theme.ink, fontWeight: '700' }}>Mã {item.ntk}</Text>
+                  {' · '}
+                  <Text style={{ color: theme.accent, fontWeight: '700' }}>PO {item.po}</Text>
+                </Text>
+              </View>
               <TextInput
-                style={styles.input(theme)}
+                ref={qtyInputRef}
+                editable={!isSubmitting}
+                style={[styles.input(theme), isSubmitting && { opacity: 0.7 }]}
                 keyboardType="numeric"
                 placeholder="Số lượng sản xuất"
                 placeholderTextColor={theme.sub}
@@ -382,19 +498,45 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
               />
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
                 <View style={[styles.pickerWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
-                  <Picker selectedValue={line} onValueChange={setLine} style={{ color: theme.ink }}>
+                  <Picker
+                    selectedValue={line}
+                    onValueChange={setLine}
+                    style={{ color: theme.ink }}
+                    enabled={!isSubmitting}
+                  >
                     <Picker.Item label="Thủ công" value="manual" />
                     <Picker.Item label="Tự động" value="auto" />
                   </Picker>
                 </View>
-                <TouchableOpacity style={[styles.addBtn, { backgroundColor: theme.accent }]} onPress={handleAdd}>
-                  <Text style={{ color: '#fff', fontWeight: '700' }}>Thêm</Text>
+                <TouchableOpacity
+                  style={[
+                    styles.addBtn,
+                    {
+                      backgroundColor: theme.accent,
+                      opacity: isSubmitting ? 0.7 : 1,
+                      flexDirection: 'row',
+                      gap: 6,
+                    },
+                  ]}
+                  onPress={handleAdd}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <>
+                      <ActivityIndicator size="small" color="#fff" />
+                      <Text style={{ color: '#fff', fontWeight: '700' }}>Đang thêm...</Text>
+                    </>
+                  ) : (
+                    <Text style={{ color: '#fff', fontWeight: '700' }}>Thêm</Text>
+                  )}
                 </TouchableOpacity>
               </View>
 
               <Text style={styles.sectionLabel(theme)}>Hàng lỗi (không bắt buộc)</Text>
               <TextInput
-                style={styles.input(theme)}
+                ref={defectQtyInputRef}
+                editable={!isSubmitting}
+                style={[styles.input(theme), isSubmitting && { opacity: 0.7 }]}
                 keyboardType="numeric"
                 placeholder="Số lượng hàng lỗi"
                 placeholderTextColor={theme.sub}
@@ -408,6 +550,7 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
                   return (
                     <TouchableOpacity
                       key={key}
+                      disabled={isSubmitting}
                       style={[styles.defectChip, { borderColor: theme.line, backgroundColor: defectTypes[key] ? chipColor : theme.card }]}
                       onPress={() => setDefectTypes(prev => ({ ...prev, [key]: !prev[key] }))}
                     >
@@ -421,75 +564,216 @@ export default function ItemCard({ item, theme, onAddEntry, onUpdateEntry, onDel
 
           {/* B. Mã hàng CÓ số hiệu → hiển thị tiến độ & nhập theo từng số hiệu */}
           {hasRefs && (
-            <View style={styles.refSection(theme)}>
-              <Text style={styles.sectionLabel(theme)}>Tiến độ & nhập theo số hiệu</Text>
+            <View style={[styles.refSection, { borderTopColor: theme.line }]}>
+              <View style={[styles.poNoticeBanner, { backgroundColor: theme.bg, borderColor: theme.line, marginBottom: 10 }]}>
+                <Text style={{ color: theme.sub, fontSize: 12 }}>
+                  Đang nhập cho: <Text style={{ color: theme.ink, fontWeight: '700' }}>Mã {item.ntk}</Text>
+                  {' · '}
+                  <Text style={{ color: theme.accent, fontWeight: '700' }}>PO {item.po}</Text>
+                </Text>
+              </View>
+
+              <View style={styles.refSectionHeaderRow}>
+                <Text style={styles.sectionLabel(theme)}>Tiến độ & nhập theo từng số hiệu</Text>
+                <View style={[styles.refCountBadge, { backgroundColor: theme.bg, borderColor: theme.line }]}>
+                  <Text style={{ color: theme.sub, fontSize: 11, fontWeight: '700' }}>
+                    {refProgress.length} số hiệu
+                  </Text>
+                </View>
+              </View>
+
               {refProgress.map(entry => {
                 const key = `${REF_KEY_PREFIX}${entry.ref_no}`;
                 const lineForRef = refLine[key] || 'manual';
                 const defectTypesForRef = refDefectTypes[key] || { yellow: false, red: false, tear: false };
+                const isRefBusy = submittingRef === entry.ref_no;
+
+                const refProduced = entry.produced || 0;
+                const refTarget = entry.target || 0;
+                const refRemaining = Math.max(refTarget - refProduced, 0);
+                const refPct = refTarget > 0 ? Math.round((refProduced / refTarget) * 1000) / 10 : 0;
+                const refCls = pctClass(refPct);
+                const refPctColor = theme[COLOR_BY_CLASS[refCls]];
+                const isRefDone = refTarget > 0 && refProduced >= refTarget;
+                const isRefLastUpdated = isLastUpdated && lastUpdatedInfo?.refNo === entry.ref_no;
+
                 return (
-                  <View key={entry.ref_no} style={styles.refCard(theme)}>
-                    {/* Header: ref_no + tiến độ */}
+                  <View
+                    key={entry.ref_no}
+                    style={[
+                      styles.refCard,
+                      {
+                        backgroundColor: theme.bg,
+                        borderColor: isRefLastUpdated
+                          ? theme.good
+                          : isRefDone
+                          ? theme.good + '66'
+                          : theme.line,
+                        borderWidth: isRefLastUpdated ? 2 : 1.5,
+                      },
+                    ]}
+                  >
+                    {/* Tag vừa cập nhật cho ref */}
+                    {isRefLastUpdated && (
+                      <View style={[styles.refLastUpdatedTag, { backgroundColor: theme.good + '18', borderColor: theme.good }]}>
+                        <Text style={[styles.refLastUpdatedText, { color: theme.good }]}>
+                          ⚡ Vừa cập nhật: +{lastUpdatedInfo.qty?.toLocaleString('vi-VN')} pcs {lastUpdatedInfo.time ? `(${lastUpdatedInfo.time})` : ''}
+                        </Text>
+                      </View>
+                    )}
+
+                    {/* Header: Ref Badge + % / Hoàn thành */}
                     <View style={styles.refCardHeader}>
-                      <Text style={styles.refNoText(theme)}>{entry.ref_no}</Text>
-                      <Text style={styles.refProgressText(theme)}>{refProgressText(entry)}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <View style={[styles.refBadge, { backgroundColor: theme.accent + '22', borderColor: theme.accent }]}>
+                          <Text style={[styles.refBadgeText, { color: theme.ink }]}>Ref {entry.ref_no}</Text>
+                        </View>
+                        {isRefDone && (
+                          <View style={[styles.refDoneBadge, { backgroundColor: theme.good + '22', borderColor: theme.good }]}>
+                            <Text style={{ color: theme.good, fontSize: 11, fontWeight: '700' }}>✓ Hoàn tất</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={[styles.refPctText, { color: refPctColor }]}>
+                        {refPct}%
+                      </Text>
                     </View>
-                    {/* Input row: SL + Chuyền + SL lỗi + Loại lỗi + Thêm */}
-                    <View style={styles.refCardRow}>
+
+                    {/* Mini progress bar */}
+                    <View style={[styles.refProgressBarBg, { backgroundColor: theme.line }]}>
+                      <View
+                        style={[
+                          styles.refProgressBarFill,
+                          { width: `${Math.min(refPct, 100)}%`, backgroundColor: refPctColor },
+                        ]}
+                      />
+                    </View>
+
+                    {/* Chỉ số chi tiết: Kế hoạch / Đã làm / Còn lại */}
+                    <View style={[styles.refMetricsRow, { backgroundColor: theme.card, borderColor: theme.line }]}>
+                      <View style={styles.refMetricItem}>
+                        <Text style={[styles.refMetricLabel, { color: theme.sub }]}>Kế hoạch</Text>
+                        <Text style={[styles.refMetricValue, { color: theme.ink }]}>{refTarget.toLocaleString('vi-VN')}</Text>
+                      </View>
+                      <View style={styles.refMetricItem}>
+                        <Text style={[styles.refMetricLabel, { color: theme.sub }]}>Đã làm</Text>
+                        <Text style={[styles.refMetricValue, { color: refPctColor }]}>
+                          {refProduced.toLocaleString('vi-VN')}
+                        </Text>
+                      </View>
+                      <View style={styles.refMetricItem}>
+                        <Text style={[styles.refMetricLabel, { color: theme.sub }]}>Còn lại</Text>
+                        <Text style={[styles.refMetricValue, { color: refRemaining === 0 ? theme.good : theme.ink }]}>
+                          {refRemaining.toLocaleString('vi-VN')}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Dòng 1: Nhập SL sản xuất + Chọn Chuyền + Nút Thêm */}
+                    <View style={styles.refInputMainRow}>
                       <TextInput
-                        style={styles.refInputSmall(theme)}
+                        editable={!isRefBusy}
+                        style={[
+                          styles.refInputMain,
+                          { borderColor: theme.line, backgroundColor: theme.card, color: theme.ink },
+                          isRefBusy && { opacity: 0.7 },
+                        ]}
                         keyboardType="numeric"
-                        placeholder="SL"
+                        placeholder="SL sản xuất"
                         placeholderTextColor={theme.sub}
                         value={refQty[key] ?? ''}
                         onChangeText={v => setRefQtyFor(entry.ref_no, v)}
                       />
-                      <View style={[styles.pickerWrap, { borderColor: theme.line, backgroundColor: theme.bg, width: 90, minWidth: 90 }]}>
+                      <View style={[styles.refPickerWrap, { borderColor: theme.line, backgroundColor: theme.card }]}>
                         <Picker
                           selectedValue={lineForRef}
                           onValueChange={v => setRefLineFor(entry.ref_no, v)}
-                          style={{ color: theme.ink }}
+                          style={{ color: theme.ink, width: 110 }}
+                          enabled={!isRefBusy}
                         >
-                          <Picker.Item label="TC" value="manual" />
-                          <Picker.Item label="TD" value="auto" />
+                          <Picker.Item label="Thủ công" value="manual" />
+                          <Picker.Item label="Tự động" value="auto" />
                         </Picker>
                       </View>
+                      <TouchableOpacity
+                        style={[
+                          styles.refAddBtn,
+                          {
+                            backgroundColor: theme.accent,
+                            opacity: isRefBusy ? 0.7 : 1,
+                          },
+                        ]}
+                        onPress={() => handleAddForRef(entry)}
+                        disabled={isRefBusy}
+                      >
+                        {isRefBusy ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <Text style={styles.refAddBtnText}>＋ Thêm</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* Dòng 2: Nhập SL lỗi + Loại lỗi */}
+                    <View style={styles.refDefectRow}>
                       <TextInput
-                        style={styles.refInputSmall(theme)}
+                        editable={!isRefBusy}
+                        style={[
+                          styles.refInputDefect,
+                          { borderColor: theme.line, backgroundColor: theme.card, color: theme.ink },
+                          isRefBusy && { opacity: 0.7 },
+                        ]}
                         keyboardType="numeric"
                         placeholder="SL lỗi"
                         placeholderTextColor={theme.sub}
                         value={refDefectQty[key] ?? ''}
                         onChangeText={v => setRefDefectQtyFor(entry.ref_no, v)}
                       />
-                      <View style={styles.defectChipsCompact}>
-                        {[['yellow', 'TV'], ['red', 'TD'], ['tear', 'RB']].map(([dKey, dLabel]) => {
-                          const chipColor = dKey === 'yellow' ? '#FFD600' : dKey === 'red' ? '#E53935' : '#FFFFFF';
-                          const textColor = dKey === 'tear' ? '#333' : '#FFFFFF';
+                      <View style={styles.refDefectChips}>
+                        {[
+                          ['yellow', 'Thẻ vàng', '#FFD600', '#333'],
+                          ['red', 'Thẻ đỏ', '#E53935', '#fff'],
+                          ['tear', 'Rách bọc', '#FFFFFF', '#333'],
+                        ].map(([dKey, dLabel, chipColor, textColor]) => {
+                          const active = !!defectTypesForRef[dKey];
                           return (
                             <TouchableOpacity
                               key={dKey}
-                              style={[styles.defectChipCompact, { borderColor: theme.line, backgroundColor: defectTypesForRef[dKey] ? chipColor : theme.card }]}
-                              onPress={() => setRefDefectTypesFor(entry.ref_no, { ...defectTypesForRef, [dKey]: !defectTypesForRef[dKey] })}
+                              disabled={isRefBusy}
+                              style={[
+                                styles.refDefectChip,
+                                {
+                                  borderColor: active ? chipColor : theme.line,
+                                  backgroundColor: active ? chipColor : theme.card,
+                                },
+                              ]}
+                              onPress={() => setRefDefectTypesFor(entry.ref_no, { ...defectTypesForRef, [dKey]: !active })}
                             >
-                              <Text style={{ color: defectTypesForRef[dKey] ? textColor : theme.sub, fontSize: 10.5, fontWeight: '600' }}>{dLabel}</Text>
+                              <Text
+                                style={{
+                                  color: active ? textColor : theme.sub,
+                                  fontSize: 11,
+                                  fontWeight: active ? '700' : '500',
+                                }}
+                              >
+                                {dLabel}
+                              </Text>
                             </TouchableOpacity>
                           );
                         })}
                       </View>
-                      <TouchableOpacity
-                        style={[styles.addBtn, { backgroundColor: theme.accent, paddingHorizontal: 10, paddingVertical: 6 }]}
-                        onPress={() => handleAddForRef(entry)}
-                      >
-                        <Text style={{ color: '#fff', fontWeight: '700', fontSize: 11 }}>Thêm</Text>
-                      </TouchableOpacity>
                     </View>
                   </View>
                 );
               })}
-              {/* AC-RF-08: phần chưa gắn số hiệu phải được nói ra */}
+
+              {/* AC-RF-08: phần chưa gắn số hiệu */}
               {unattributed && (
-                <Text style={styles.unattributedText(theme)}>{unattributed}</Text>
+                <View style={[styles.unattributedBanner, { backgroundColor: theme.warn + '15', borderColor: theme.warn }]}>
+                  <Text style={[styles.unattributedText, { color: theme.warn }]}>
+                    ⚠️ {unattributed}
+                  </Text>
+                </View>
               )}
             </View>
           )}
@@ -595,17 +879,167 @@ const styles = StyleSheet.create({
   refBox: { marginTop: 10, paddingLeft: 6 },
   refLabel: (theme) => ({ color: theme.sub, fontSize: 10.5, fontWeight: '700', textTransform: 'uppercase', marginBottom: 3 }),
   refValue: (theme) => ({ color: theme.ink, fontSize: 13.5, fontWeight: '600', marginTop: 2 }),
-  refSection: (theme) => ({ marginTop: 14, paddingTop: 10, borderTopWidth: 1, borderTopColor: theme.line }),
-  refCard: (theme) => ({ backgroundColor: theme.bg, borderRadius: 8, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: theme.line }),
-  refCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  refCardRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
-  refNoText: (theme) => ({ color: theme.ink, fontSize: 14, fontWeight: '700' }),
-  refProgressText: (theme) => ({ color: theme.sub, fontSize: 12, fontWeight: '500' }),
-  unattributedText: (theme) => ({ color: theme.sub, fontSize: 11.5, marginTop: 6, fontStyle: 'italic', fontWeight: '500' }),
-  refInputSmall: (theme) => ({
-    borderWidth: 1, borderColor: theme.line, backgroundColor: theme.card, color: theme.ink,
-    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, fontSize: 13, width: 80,
-  }),
+  refSection: {
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+  },
+  refSectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  refCountBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  refCard: {
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1.5,
+  },
+  refCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  refBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  refBadgeText: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  refDoneBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  refPctText: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  refProgressBarBg: {
+    height: 5,
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  refProgressBarFill: {
+    height: '100%',
+  },
+  refMetricsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    borderRadius: 8,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+  },
+  refMetricItem: {
+    alignItems: 'center',
+  },
+  refMetricLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  refMetricValue: {
+    fontSize: 13.5,
+    fontWeight: '700',
+  },
+  refInputMainRow: {
+    flexDirection: 'row',
+    gap: 6,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  refInputMain: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    fontSize: 13,
+    minHeight: 38,
+  },
+  refPickerWrap: {
+    borderWidth: 1,
+    borderRadius: 8,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    height: 38,
+  },
+  refAddBtn: {
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    height: 38,
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 64,
+  },
+  refAddBtnText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 12.5,
+  },
+  refDefectRow: {
+    flexDirection: 'row',
+    gap: 6,
+    alignItems: 'center',
+  },
+  refInputDefect: {
+    width: 72,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    fontSize: 12,
+    minHeight: 34,
+  },
+  refDefectChips: {
+    flexDirection: 'row',
+    gap: 4,
+    flex: 1,
+    flexWrap: 'wrap',
+  },
+  refDefectChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  refLastUpdatedTag: {
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginBottom: 8,
+  },
+  refLastUpdatedText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  unattributedBanner: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 8,
+    marginTop: 6,
+  },
+  unattributedText: {
+    fontSize: 11.5,
+    fontWeight: '600',
+  },
   sectionLabel: (theme) => ({ color: theme.sub, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', marginTop: 14, marginBottom: 6 }),
   input: (theme) => ({ borderWidth: 1, borderColor: theme.line, backgroundColor: theme.bg, color: theme.ink, borderRadius: 10, padding: 12, fontSize: 15 }),
   pickerWrap: { borderWidth: 1, borderRadius: 10, overflow: 'hidden', justifyContent: 'center' },
@@ -613,4 +1047,40 @@ const styles = StyleSheet.create({
   defectChip: { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 999, borderWidth: 1 },
   defectChipCompact: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, borderWidth: 1 },
   defectChipsCompact: { flexDirection: 'row', gap: 3 },
+  poBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    alignSelf: 'center',
+  },
+  poBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  lastUpdatedBanner: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 10,
+  },
+  lastUpdatedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  lastUpdatedTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  poNoticeBanner: {
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginTop: 6,
+    marginBottom: 8,
+  },
 });

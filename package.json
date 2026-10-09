@@ -45,7 +45,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "node --no-warnings scripts/test-validateQty.mjs && node --no-warnings scripts/test-deleteItem.mjs && node --no-warnings scripts/test-deleteItemsByPo.mjs && node --no-warnings scripts/test-date.mjs && node --no-warnings scripts/test-archiveDelete.mjs && node --no-warnings scripts/test-packingV1.mjs && node --no-warnings scripts/test-importFormat.mjs && npm run --silent test:refFormat && npm run --silent test:finishPo && npm run --silent test:container && npm run --silent test:schemaV2 && npm run --silent test:dbInit",
+    "test": "node --no-warnings scripts/test-validateQty.mjs && node --no-warnings scripts/test-deleteItem.mjs && node --no-warnings scripts/test-deleteItemsByPo.mjs && node --no-warnings scripts/test-date.mjs && node --no-warnings scripts/test-archiveDelete.mjs && node --no-warnings scripts/test-packingV1.mjs && node --no-warnings scripts/test-importFormat.mjs && npm run --silent test:refFormat && npm run --silent test:finishPo && npm run --silent test:container && npm run --silent test:lastUpdated && npm run --silent test:schemaV2 && npm run --silent test:dbInit",
     "test:validate": "node --no-warnings scripts/test-validateQty.mjs",
     "test:delete": "node --no-warnings scripts/test-deleteItem.mjs",
     "test:deletePo": "node --no-warnings scripts/test-deleteItemsByPo.mjs",
@@ -57,6 +57,7 @@
     "test:refFormat": "node --no-warnings scripts/test-refFormat.mjs",
     "test:finishPo": "node --no-warnings scripts/test-finishOrderByPo.mjs",
     "test:container": "node --no-warnings scripts/test-containerEdit.mjs",
+    "test:lastUpdated": "node --no-warnings scripts/test-lastUpdatedHighlight.mjs",
     "test:dbInit": "node --no-warnings scripts/test-dbInit.mjs",
     "test:schemaV2": "node --no-warnings scripts/test-schemaV2.mjs"
   },
