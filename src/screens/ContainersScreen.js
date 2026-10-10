@@ -10,7 +10,7 @@ import FilterChips from '@/components/FilterChips';
 import ProgressBar from '@/components/ProgressBar';
 import PalletRow from '@/components/PalletRow';
 import ArchiveCard from '@/components/ArchiveCard';
-import PalletEditSheet from '@/components/PalletEditSheet';
+import PalletEditSheet, { palletErrorMessage } from '@/components/PalletEditSheet';
 import ContainerEditSheet from '@/components/ContainerEditSheet';
 import FinishOrderModal from '@/components/FinishOrderModal';
 
@@ -29,7 +29,7 @@ export default function ContainersScreen() {
   const [archivesAll, setArchivesAll] = useState(null);
   const [archivesOpen, setArchivesOpen] = useState({});
   // FEAT-10: form thêm/sửa kiện. `draftPallet` = null ⇒ đang thêm mới.
-  const [draft, setDraft] = useState(null); // { containerId, label, pallet, nextNo }
+  const [draft, setDraft] = useState(null); // { containerId, label, po, pallet, nextNo }
   // FEAT-25: form thêm/sửa container. `containerDraft` = null ⇒ đang đóng.
   const [containerDraft, setContainerDraft] = useState(null); // { isAdd, container }
   // FEAT-21: `containerData` là cây từ bảng thật (`containers` → `pallets` → `pallet_lines`),
@@ -66,11 +66,33 @@ export default function ContainersScreen() {
 
   function openAddPallet(c) {
     const nextNo = (c.pallets || []).reduce((m, p) => Math.max(m, p.pallet_no ?? p.no), 0) + 1;
-    setDraft({ containerId: c.id, label: c.container_no, pallet: null, nextNo });
+    setDraft({ containerId: c.id, label: c.container_no, po: c.po, pallet: null, nextNo });
   }
 
   function openEditPallet(c, pallet) {
-    setDraft({ containerId: c.id, label: c.container_no, pallet, nextNo: null });
+    setDraft({ containerId: c.id, label: c.container_no, po: c.po, pallet, nextNo: null });
+  }
+
+  function confirmDeletePallet(c, pallet) {
+    const palletNo = pallet.pallet_no ?? pallet.no;
+    const qty = (pallet.items || []).reduce((s, it) => s + it.qty, 0);
+    Alert.alert(
+      'Xác nhận xoá kiện',
+      `Xoá kiện ${palletNo} khỏi container ${c.container_no}?\nTổng số lượng: ${qty.toLocaleString('vi-VN')} pcs. Không thể hoàn tác.`,
+      [
+        { text: 'Huỷ', style: 'cancel' },
+        {
+          text: 'Xoá kiện',
+          style: 'destructive',
+          onPress: async () => {
+            const res = await removePallet(c.id, palletNo);
+            if (res && res.ok === false) {
+              Alert.alert('Không xoá được', palletErrorMessage(res.error));
+            }
+          },
+        },
+      ]
+    );
   }
 
   // FEAT-25: mở form sửa thông tin container (tên/mã container, số chì seal)
@@ -89,6 +111,27 @@ export default function ContainersScreen() {
     const set = new Set([...cpos, ...fromPoRows]);
     return Array.from(set).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
   }, [cpos, poRows]);
+
+  // Danh sách mã hàng khả dụng cho kiện đang thêm / sửa (lọc theo PO của container)
+  const draftItemOptions = useMemo(() => {
+    if (!draft) return [];
+    const poItems = draft.po ? items.filter(it => it.po === draft.po) : items;
+    const baseItems = poItems.length > 0 ? poItems : items;
+    const map = new Map();
+    baseItems.forEach(it => {
+      if (it.ntk && !map.has(it.ntk)) {
+        map.set(it.ntk, { ntk: it.ntk, target: it.target, order_line_id: it.order_line_id });
+      }
+    });
+    if (draft.pallet?.items) {
+      draft.pallet.items.forEach(it => {
+        if (it.ntk && !map.has(it.ntk)) {
+          map.set(it.ntk, { ntk: it.ntk, target: 0, order_line_id: it.order_line_id });
+        }
+      });
+    }
+    return Array.from(map.values()).sort((a, b) => a.ntk.localeCompare(b.ntk));
+  }, [items, draft]);
 
 
   // FEAT-15: chạm mũi tên trên thẻ đơn lưu trữ. Nếu đang ở chế độ "thu gọn tất cả"
@@ -301,7 +344,7 @@ export default function ContainersScreen() {
                       pallet={p}
                       onToggleLine={togglePalletLine}
                       onEditPallet={pallet => openEditPallet(c, pallet)}
-                      onDeletePallet={pallet => openEditPallet(c, pallet)}
+                      onDeletePallet={pallet => confirmDeletePallet(c, pallet)}
                       theme={theme}
                     />
                   ))}
@@ -358,9 +401,9 @@ export default function ContainersScreen() {
 
         {draft && (
           <PalletEditSheet
-            containerLabel={`📦 ${draft.label}`}
+            containerLabel={`📦 ${draft.label}${draft.po ? ` · PO ${draft.po}` : ''}`}
             pallet={draft.pallet}
-            itemOptions={itemNtks}
+            itemOptions={draftItemOptions}
             defaultNo={draft.nextNo}
             onClose={() => setDraft(null)}
             onSubmit={draft.pallet

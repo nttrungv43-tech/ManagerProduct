@@ -601,6 +601,10 @@ console.log('   (SQLite thật cho schema/view/FK; hạn mức tầng DB kiểm 
     [false, true]);
   eq('ref target = 0 ⇒ không áp hạn mức (quy ước target 0 như checkLineTarget)',
     checkQtyLimit({ target: 0, produced: 999, incomingQty: 5 }).ok, true);
+  eq('INV-V1: tổng thẻ 350 + 366 = 716 ≤ 716 ⇒ OK (đã fix BUG-N1)',
+    checkQtyLimit({ target: 716, produced: 350, incomingQty: 366 }).ok, true);
+  eq('INV-V1: tổng thẻ 350 + 367 = 717 > 716 ⇒ chặn OVER_TARGET (đã fix BUG-N1)',
+    checkQtyLimit({ target: 716, produced: 350, incomingQty: 367 }).ok, false);
 
   // ── AC-RF-14: xoá nhật ký ⇒ dòng gắn ref đi theo ──
   const delId = insEntry(10, 'D980781');

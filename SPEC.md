@@ -72,9 +72,8 @@ Xem đầy đủ trong [`SPEC-reference.md`](SPEC-reference.md) §12:
 | FEAT-23 | ✅ Nhập số lượng **theo từng `order_ref`** (bảng `production_entry_refs`), phương án A — thẻ cha giữ nguyên, ref là dòng con |
 | FEAT-02..07 | 📋 Backlog |
 
-> ⚠️ **`BUG-N1` chờ chủ dự án quyết định:** `checkLineTarget` gọi `checkQtyLimit` sai kiểu (theo vị
-> trí, hàm nhận object) ⇒ `INV-V1` **không được kiểm ở tầng DB**, chỉ còn UI tự cản. Sửa là thay đổi
-> hành vi Cấp 3. Chi tiết: [`FEAT-23`](specs/features/FEAT-23-entry-qty-by-ref.md) §8.1.
+> ✅ **`BUG-N1` đã sửa:** `checkLineTarget` đã được chuyển sang gọi `checkQtyLimit` đúng dạng object
+> `{ target, produced, incomingQty }`, khôi phục kiểm tra hạn mức kế hoạch `INV-V1` ở tầng cơ sở dữ liệu.
 
 > **Lưu ý khi nhập JSON:** app nhập được **3** định dạng — `entries` (nhật ký sản xuất), packing list phẳng
 > (`總表` + `Column1..Column10`) và **`packing_data.json`** (`schema_version: 1`, FEAT-17).

@@ -249,17 +249,10 @@ async function checkLineTarget(db, orderLineId, qty, excludeEntryId = null) {
   );
   const target = num(line.target);
   const produced = num(row?.produced);
-  // target = 0 ⇒ không áp hạn mức (giữ đúng hành vi bản cũ, SPEC-data.md §5.4).
-  //
-  // ⚠️ BUG (có sẵn từ FEAT-21, **chưa** sửa trong phạm vi FEAT-23): `checkQtyLimit` nhận **object**
-  // `{ target, produced, incomingQty, hasLimit }` nhưng chỗ này gọi theo **vị trí** ⇒ 4 đối số rơi
-  // vào tham số đầu tiên (`target` trở thành `produced`), còn `incomingQty` luôn rỗng ⇒
-  // `checkQtyLimit` trả `{ok:true}` **luôn**. Hệ quả: `INV-V1` (`SUM entries ≤ target`) **không
-  // được kiểm ở tầng DB** trên app thật — chỉ UI tự tin là cản. Gọi lại đúng dạng object sẽ khôi
-  // phục hành vi cũ, nhưng đó là thay đổi hành vi Cấp 3 (người dùng đang nhập vượt hạn mức sẽ bị chặn)
-  // ⇒ cần chủ dự án duyệt riêng. `checkRefTarget` của FEAT-23 **không** dùng bản này.
+  // target = 0 => không áp hạn mức (giữ đúng hành vi bản cũ, SPEC-data.md §5.4).
+  // Đã sửa BUG-N1: checkQtyLimit nhận object { target, produced, incomingQty, hasLimit }.
   if (target > 0) {
-    const limit = await checkQtyLimit(produced, qty, target, line.item_code ?? '');
+    const limit = checkQtyLimit({ target, produced, incomingQty: qty });
     if (!limit.ok) return limit;
   }
   return { ok: true, target, produced };
@@ -613,15 +606,19 @@ export async function addPallet(batchId, containerId, { no, items }) {
   const palletNo = parseQty(no);
   if (palletNo === null || palletNo <= 0) return fail('INVALID_PALLET_NO');
 
-  const ct = await db.getFirstAsync(`SELECT id FROM containers WHERE id = ?`, [containerId]);
+  const ct = await db.getFirstAsync(
+    `SELECT id, po_id, order_batch_id FROM containers WHERE id = ?`,
+    [containerId]
+  );
   if (!ct) return fail('CONTAINER_NOT_FOUND');
   const dup = await db.getFirstAsync(
     `SELECT 1 AS x FROM pallets WHERE container_id = ? AND pallet_no = ?`, [containerId, palletNo]
   );
   if (dup) return fail('PALLET_EXISTS', { no: palletNo });
 
-  const norm = normalizePalletItems(items);
-  if (norm.length === 0) return fail('PALLET_EMPTY');
+  const resolved = await resolvePalletItems(db, ct, items);
+  if (!resolved.ok) return resolved;
+  const norm = resolved.items;
 
   return withTransaction(db, async () => {
     const res = await db.runAsync(
@@ -630,7 +627,7 @@ export async function addPallet(batchId, containerId, { no, items }) {
     );
     for (const it of norm) {
       await db.runAsync(
-        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty) VALUES (?, ?, ?)`,
+        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty, done) VALUES (?, ?, ?, 0)`,
         [res.lastInsertRowId, it.order_line_id, it.qty]
       );
     }
@@ -638,40 +635,77 @@ export async function addPallet(batchId, containerId, { no, items }) {
   });
 }
 
-/** Sửa kiện: `pallet_no` bất biến (giữ đúng hành vi bản cũ) — chỉ kéo dòng hàng. */
-export async function updatePallet(batchId, containerId, palletNo, { items }) {
+/** Sửa kiện: cập nhật số hiệu (nếu hợp lệ) và dòng hàng, giữ nguyên trạng thái tick. */
+export async function updatePallet(batchId, containerId, palletNo, { no, items }) {
   const db = await getDb();
-  const pal = await db.getFirstAsync(
-    `SELECT id FROM pallets WHERE container_id = ? AND pallet_no = ?`, [containerId, palletNo]
+  const curPalletNo = parseQty(palletNo);
+  if (curPalletNo === null || curPalletNo <= 0) return fail('INVALID_PALLET_NO');
+
+  const ct = await db.getFirstAsync(
+    `SELECT id, po_id, order_batch_id FROM containers WHERE id = ?`,
+    [containerId]
   );
-  if (!pal) return fail('PALLET_NOT_FOUND');
-  const norm = normalizePalletItems(items);
-  if (norm.length === 0) return fail('PALLET_EMPTY');
+  if (!ct) return fail('CONTAINER_NOT_FOUND');
+
+  const pal = await db.getFirstAsync(
+    `SELECT id, container_id, po_id, pallet_no FROM pallets WHERE container_id = ? AND pallet_no = ?`,
+    [containerId, curPalletNo]
+  );
+  if (!pal) return fail('PALLET_NOT_FOUND', { no: curPalletNo });
+
+  let targetPalletNo = curPalletNo;
+  if (no !== undefined && no !== null && String(no).trim() !== '') {
+    const parsedNo = parseQty(no);
+    if (parsedNo === null || parsedNo <= 0) return fail('INVALID_PALLET_NO');
+    if (parsedNo !== curPalletNo) {
+      const dup = await db.getFirstAsync(
+        `SELECT 1 FROM pallets WHERE container_id = ? AND pallet_no = ? AND id != ?`,
+        [containerId, parsedNo, pal.id]
+      );
+      if (dup) return fail('PALLET_EXISTS', { no: parsedNo });
+      targetPalletNo = parsedNo;
+    }
+  }
+
+  const resolved = await resolvePalletItems(db, ct, items);
+  if (!resolved.ok) return resolved;
+  const norm = resolved.items;
 
   return withTransaction(db, async () => {
+    const existingLines = await db.getAllAsync(
+      `SELECT order_line_id, done FROM pallet_lines WHERE pallet_id = ?`,
+      [pal.id]
+    );
+    const doneByLineId = new Map(existingLines.map(l => [l.order_line_id, l.done]));
+
     await db.runAsync(`DELETE FROM pallet_lines WHERE pallet_id = ?`, [pal.id]);
     for (const it of norm) {
+      const isDone = it.done !== undefined ? (it.done ? 1 : 0) : (doneByLineId.get(it.order_line_id) ?? 0);
       await db.runAsync(
-        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty) VALUES (?, ?, ?)`,
-        [pal.id, it.order_line_id, it.qty]
+        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty, done) VALUES (?, ?, ?, ?)`,
+        [pal.id, it.order_line_id, it.qty, isDone]
       );
     }
     await db.runAsync(
-      `UPDATE pallets SET is_mixed = ? WHERE id = ?`, [norm.length > 1 ? 1 : 0, pal.id]
+      `UPDATE pallets SET pallet_no = ?, is_mixed = ? WHERE id = ?`,
+      [targetPalletNo, norm.length > 1 ? 1 : 0, pal.id]
     );
-    return done({ no: palletNo });
+    return done({ no: targetPalletNo });
   });
 }
 
-/** Xoá kiện (kèm dòng hàng — `ON DELETE CASCADE`). */
+/** Xoá kiện (kèm dòng hàng — ON DELETE CASCADE). */
 export async function removePallet(batchId, containerId, palletNo) {
   const db = await getDb();
+  const curPalletNo = parseQty(palletNo);
+  if (curPalletNo === null || curPalletNo <= 0) return fail('INVALID_PALLET_NO');
+
   const pal = await db.getFirstAsync(
-    `SELECT id FROM pallets WHERE container_id = ? AND pallet_no = ?`, [containerId, palletNo]
+    `SELECT id FROM pallets WHERE container_id = ? AND pallet_no = ?`, [containerId, curPalletNo]
   );
-  if (!pal) return fail('PALLET_NOT_FOUND');
+  if (!pal) return fail('PALLET_NOT_FOUND', { no: curPalletNo });
   await db.runAsync(`DELETE FROM pallets WHERE id = ?`, [pal.id]);
-  return done({ no: palletNo });
+  return done({ no: curPalletNo });
 }
 
 /** Cập nhật thông tin container (tên container, số seal/chì). */
@@ -746,17 +780,60 @@ export async function addContainer(batchId, poCode, { container_no, seal_no }) {
 }
 
 
-function normalizePalletItems(items) {
-  const list = Array.isArray(items) ? items : [];
-  const out = [];
-  for (const it of list) {
-    const q = parseQty(it?.qty);
-    if (q === null || q <= 0) return [];
-    const lineId = parseQty(it?.order_line_id);
-    if (lineId === null || lineId <= 0) return [];
-    out.push({ order_line_id: lineId, qty: q });
+async function resolvePalletItems(db, container, items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return fail('PALLET_EMPTY');
   }
-  return out;
+  const out = [];
+  const seenLineIds = new Set();
+  for (const it of items) {
+    const q = parseQty(it?.qty);
+    if (q === null || q <= 0) {
+      return fail('INVALID_PALLET_QTY', { ntk: it?.ntk });
+    }
+
+    let lineId = parseQty(it?.order_line_id);
+    const ntk = String(it?.ntk ?? '').trim();
+
+    if (!lineId && !ntk) {
+      return fail('INVALID_NTK');
+    }
+
+    if (!lineId && ntk) {
+      let line = null;
+      if (container?.po_id) {
+        line = await db.getFirstAsync(
+          'SELECT id, item_code FROM order_lines WHERE po_id = ? AND item_code = ?',
+          [container.po_id, ntk]
+        );
+      }
+      if (!line && container?.order_batch_id) {
+        line = await db.getFirstAsync(
+          'SELECT ol.id, ol.item_code FROM order_lines ol JOIN pos p ON p.id = ol.po_id WHERE p.order_batch_id = ? AND ol.item_code = ?',
+          [container.order_batch_id, ntk]
+        );
+      }
+      if (!line) {
+        return fail('ITEM_NOT_IN_ORDER', { ntk });
+      }
+      lineId = line.id;
+    } else if (lineId) {
+      const line = await db.getFirstAsync(
+        'SELECT id, item_code FROM order_lines WHERE id = ?',
+        [lineId]
+      );
+      if (!line) {
+        return fail('ITEM_NOT_IN_ORDER', { ntk: ntk || String(lineId) });
+      }
+    }
+
+    if (seenLineIds.has(lineId)) {
+      return fail('DUPLICATE_NTK', { ntk: ntk || String(lineId) });
+    }
+    seenLineIds.add(lineId);
+    out.push({ order_line_id: lineId, qty: q, done: it?.done });
+  }
+  return { ok: true, items: out };
 }
 
 // ════════════════════════════════════════════════════════════════════════════

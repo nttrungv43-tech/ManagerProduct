@@ -160,7 +160,7 @@ export const useAppStore = create((set, get) => ({
     if (res && res.ok === false) return res;
     await get().refreshContainerData();
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
-    return { ok: true };
+    return res ?? { ok: true };
   },
 
   updatePallet: async (containerId, palletNo, payload) => {
@@ -168,7 +168,7 @@ export const useAppStore = create((set, get) => ({
     if (res && res.ok === false) return res;
     await get().refreshContainerData();
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
-    return { ok: true };
+    return res ?? { ok: true };
   },
 
   removePallet: async (containerId, palletNo) => {
@@ -176,7 +176,7 @@ export const useAppStore = create((set, get) => ({
     if (res && res.ok === false) return res;
     await get().refreshContainerData();
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
-    return { ok: true };
+    return res ?? { ok: true };
   },
 
   // ---------- CONTAINERS CRUD (FEAT-25) ----------

@@ -345,8 +345,5 @@
 > `order_lines` ⇒ `INV-D6`/`INV-D7` không đụng; chỉ **thêm** tham số tuỳ chọn `refNo` vào
 > `addEntry`/`updateEntry` (quy tắc vàng #3); `store/useAppStore.js` 🔒 **không sửa**.
 >
-> ⚠️ **Lỗi có sẵn phát hiện khi triển khai (`BUG-N1`), CHƯA sửa:** `checkLineTarget` gọi
-> `checkQtyLimit` theo **vị trí** trong khi hàm nhận **object** ⇒ `incomingQty` luôn `0` và
-> `hasLimit` luôn rỗng ⇒ **`INV-V1` không được kiểm ở tầng DB** (chỉ còn UI tự cản). Sửa là thay
-> đổi hành vi Cấp 3 (người đang nhập vượt hạn mức sẽ bị chặn lại) ⇒ cần chủ dự án duyệt riêng.
-> `checkRefTarget` mới **không** nhân bản lỗi này. Xem `FEAT-23` §8.1.
+> ✅ **`BUG-N1` đã sửa:** `checkLineTarget` đã được chuyển sang gọi `checkQtyLimit` đúng dạng
+> object `{ target, produced, incomingQty }`, khôi phục kiểm tra hạn mức kế hoạch `INV-V1` ở tầng DB.
