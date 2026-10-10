@@ -158,7 +158,7 @@ export const useAppStore = create((set, get) => ({
   addPallet: async (containerId, payload) => {
     const res = await q.addPallet(get().batchId, containerId, payload);
     if (res && res.ok === false) return res;
-    await get().refreshContainerData();
+    await Promise.all([get().refreshContainerData(), get().refreshItems()]);
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
     return res ?? { ok: true };
   },
@@ -166,7 +166,7 @@ export const useAppStore = create((set, get) => ({
   updatePallet: async (containerId, palletNo, payload) => {
     const res = await q.updatePallet(get().batchId, containerId, palletNo, payload);
     if (res && res.ok === false) return res;
-    await get().refreshContainerData();
+    await Promise.all([get().refreshContainerData(), get().refreshItems()]);
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
     return res ?? { ok: true };
   },
@@ -174,7 +174,7 @@ export const useAppStore = create((set, get) => ({
   removePallet: async (containerId, palletNo) => {
     const res = await q.removePallet(get().batchId, containerId, palletNo);
     if (res && res.ok === false) return res;
-    await get().refreshContainerData();
+    await Promise.all([get().refreshContainerData(), get().refreshItems()]);
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
     return res ?? { ok: true };
   },

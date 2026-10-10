@@ -1,6 +1,6 @@
 // src/screens/ItemsScreen.js
 import React, { useState, useMemo } from 'react';
-import { View, Text, TextInput, ScrollView, StyleSheet, useColorScheme, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, TextInput, ScrollView, StyleSheet, useColorScheme, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, allPOs, summaryTotals, filteredItems } from '@/store/useAppStore';
 import { getTheme } from '@/theme';
@@ -11,8 +11,6 @@ import FilterChips from '@/components/FilterChips';
 import ItemCard from '@/components/ItemCard';
 import ImportJsonButton from '@/components/ImportJsonButton';
 import ItemEditSheet from '@/components/ItemEditSheet';
-import PoDeleteSheet from '@/components/PoDeleteSheet';
-import { confirmDeleteItemsByPo, poFilterNeedsReset } from '@/utils/deleteItemsByPo';
 
 export default function ItemsScreen() {
   const theme = getTheme(useColorScheme());
@@ -20,18 +18,11 @@ export default function ItemsScreen() {
   const {
     items, poRows, addEntry, updateEntry, removeEntry, setFilter, setStatusFilter, setSearchQuery,
     importFromJson, addItem, updateItem, removeItem,
-    previewDeleteByPo, removeItemsByPo,
     lastUpdatedInfo, setLastUpdatedInfo,
   } = state;
   // FEAT-10: form thêm/sửa mã hàng. `draftItem` = null ⇒ đang thêm mới.
   const [sheetOpen, setSheetOpen] = useState(false);
   const [draftItem, setDraftItem] = useState(null);
-  // FEAT-13: xoá toàn bộ mã của một PO. `poSheet` = PO đang chọn, `poPreview` =
-  // kết quả `previewDeleteByPo` (chỉ đọc), `poBusy` khoá nút trong lúc ghi.
-  const [poSheet, setPoSheet] = useState(null);
-  const [poPreview, setPoPreview] = useState(null);
-  const [poLoading, setPoLoading] = useState(false);
-  const [poBusy, setPoBusy] = useState(false);
 
   const totals = summaryTotals(items);
   // FEAT-12: tổng theo PO là dữ liệu dẫn xuất — luôn tính trên TOÀN BỘ items,
@@ -62,54 +53,7 @@ export default function ItemsScreen() {
     setSheetOpen(true);
   }
 
-  // FEAT-13 — xoá toàn bộ mã của một PO.
-  function openPoSheet() {
-    // Mở đúng PO đang lọc nếu có, không thì PO đầu tiên của đơn.
-    const initial = activePo || pos[0] || '';
-    setPoSheet(initial);
-    setPoPreview(null);
-    if (initial) loadPoPreview(initial);
-  }
 
-  async function loadPoPreview(po) {
-    if (!po) return;
-    setPoLoading(true);
-    try {
-      const res = await previewDeleteByPo(po);
-      setPoPreview(res);
-    } finally {
-      setPoLoading(false);
-    }
-  }
-
-  function selectPo(po) {
-    setPoSheet(po);
-    setPoPreview(null);
-    loadPoPreview(po);
-  }
-
-  function closePoSheet() {
-    setPoSheet(null);
-    setPoPreview(null);
-  }
-
-  function confirmPoDelete() {
-    confirmDeleteItemsByPo({
-      po: poSheet,
-      preview: poPreview,
-      onDelete: removeItemsByPo,
-      alert: Alert,
-      onBusy: setPoBusy,
-      onSuccess: () => {
-        // AC-DEL-10: PO đang lọc không còn mã nào ⇒ trở về "Tất cả PO" để không
-        // kẹt ở màn hình trống. Đọc items mới nhất từ store sau khi đã refresh.
-        if (poFilterNeedsReset(useAppStore.getState().activeFilter, useAppStore.getState().items)) {
-          setFilter('all');
-        }
-        closePoSheet();
-      },
-    });
-  }
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.bg }]} edges={['top']}>
@@ -144,12 +88,6 @@ export default function ItemsScreen() {
           <TouchableOpacity style={[styles.addBtn, { backgroundColor: theme.accent }]} onPress={openAdd}>
             <Text style={styles.addBtnTxt}>＋ Thêm mã hàng</Text>
           </TouchableOpacity>
-          {/* FEAT-13: chỉ hiện khi store đang nạp batch `active` (INV-V3). */}
-          {canDeleteItem && (
-            <TouchableOpacity style={[styles.addBtn, { backgroundColor: theme.bad }]} onPress={openPoSheet}>
-              <Text style={styles.addBtnTxt}>🗑 Xoá theo PO</Text>
-            </TouchableOpacity>
-          )}
         </View>
 
         {list.length === 0 ? (
@@ -189,26 +127,23 @@ export default function ItemsScreen() {
             defaultPo={activePo}
             onClose={() => setSheetOpen(false)}
             onSubmit={draftItem
-              // Sửa: khoá là `order_line_id` (PO × mã), không phải `ntk` — mã có thể thuộc
-              // nhiều PO nên `ntk` không đủ để xác định dòng cần sửa.
-              ? payload => updateItem(draftItem.order_line_id, { target: payload.target })
-              // Thêm: form gửi `ntk`, `queries` dùng tên `itemCode` cho rõ nghĩa.
-              : payload => addItem({ po: payload.po, itemCode: payload.ntk, target: payload.target })}
+              // Sửa: hỗ trợ cập nhật số lượng target, số PO và tên mã hàng
+              ? payload => updateItem(draftItem.order_line_id, {
+                  target: payload.target,
+                  po: payload.po,
+                  itemCode: payload.ntk,
+                })
+              // Thêm: form gửi ntk, queries dùng tên itemCode; tự động về 'all' nếu PO khác bộ lọc hiện tại
+              : async payload => {
+                  const res = await addItem({ po: payload.po, itemCode: payload.ntk, target: payload.target });
+                  if (res && res.ok !== false) {
+                    if (state.activeFilter !== 'all' && state.activeFilter !== payload.po) {
+                      setFilter('all');
+                    }
+                  }
+                  return res;
+                }}
             onDelete={draftItem ? () => removeItem(draftItem.order_line_id) : undefined}
-            theme={theme}
-          />
-        )}
-
-        {poSheet !== null && (
-          <PoDeleteSheet
-            pos={pos}
-            selectedPo={poSheet}
-            preview={poPreview}
-            loading={poLoading}
-            busy={poBusy}
-            onSelectPo={selectPo}
-            onClose={closePoSheet}
-            onConfirm={confirmPoDelete}
             theme={theme}
           />
         )}

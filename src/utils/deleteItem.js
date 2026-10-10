@@ -25,6 +25,8 @@ export function deleteConfirmMessage(ntk) {
  */
 export const ITEM_ERROR_MESSAGES = {
   INVALID_NTK: () => 'Mã hàng chỉ gồm chữ và số, không có khoảng trắng.',
+  INVALID_PO: () => 'Vui lòng nhập hoặc chọn số PO hợp lệ.',
+  ITEM_NOT_IN_ORDER: () => 'PO không hợp lệ hoặc không có trong đơn hàng.',
   INVALID_TARGET: () => 'Số lượng phải là số nguyên không âm.',
   ITEM_EXISTS: e => `Mã hàng ${e.ntk} đã tồn tại trong đơn hàng hiện tại.`,
   ITEM_NOT_FOUND: e => `Không tìm thấy mã hàng ${e.ntk}.`,

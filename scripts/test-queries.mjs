@@ -85,7 +85,7 @@ try {
   // ══════════════════════════════════════════════════════════════════════
   console.log('4) Nhật ký sản xuất — INV-D8 và hạn mức');
   // ══════════════════════════════════════════════════════════════════════
-  const line = multi[0];
+  const line = multi.find(i => i.target >= 200);
   const a1 = await q.addEntry(line.order_line_id, { date: '2026-10-04', qty: 100, line: 'manual', defectQty: 4, defectTypes: ['yellow'] });
   check('thêm nhật ký thành công', a1.ok, JSON.stringify(a1.error));
   const a2 = await q.addEntry(line.order_line_id, { date: '2026-10-04', qty: 50, line: 'auto' });
@@ -109,7 +109,7 @@ try {
   // Vượt hạn mức của DÒNG ĐƠN HÀNG bị chặn — nhưng KHÔNG ảnh hưởng PO khác của cùng mã.
   const over = await q.addEntry(line.order_line_id, { date: '2026-10-04', qty: line.target });
   check('vượt hạn mức bị chặn', over.ok === false && over.error.code === 'OVER_TARGET', JSON.stringify(over));
-  const other = multi[1];
+  const other = multi.find(i => i.order_line_id !== line.order_line_id);
   const okOther = await q.addEntry(other.order_line_id, { date: '2026-10-04', qty: 50 });
   check('nhập PO khác của CÙNG mã vẫn được (bản cũ không làm được)', okOther.ok, JSON.stringify(okOther.error));
 
@@ -118,7 +118,7 @@ try {
   check('ngày sai bị chặn với mã lỗi', badDate.ok === false && badDate.error.code === 'INVALID_DATE', JSON.stringify(badDate));
 
   // Sửa nhật ký: trừ dòng đang sửa ra khỏi hạn mức (AC-ITEM-18).
-  const upd = await q.updateEntry(a2.id, { date: '2026-10-04', qty: line.target, line: 'auto' });
+  const upd = await q.updateEntry(a2.id, { date: '2026-10-04', qty: line.target - 100, line: 'auto' });
   check('sửa lên đúng bằng hạn mức vẫn được (không tự vượt)', upd.ok, JSON.stringify(upd.error));
 
   // ══════════════════════════════════════════════════════════════════════
@@ -130,9 +130,16 @@ try {
   const delPallet = await q.removeItem(batchId, inPallet);
   check('mã còn trong kiện thì bị chặn ITEM_IN_PALLETS',
     delPallet.ok === false && delPallet.error.code === 'ITEM_IN_PALLETS', JSON.stringify(delPallet));
-  const delEntries = await q.removeItem(batchId, line.order_line_id);
+  const po1 = (await q.fetchPoSummaries(batchId))[0];
+  const newItem = await q.addItem(batchId, { po: po1.label, itemCode: 'TEST_ENTRY_ONLY', target: 50 });
+  await q.addEntry(newItem.order_line_id, { date: '2026-10-04', qty: 10 });
+  const delEntries = await q.removeItem(batchId, newItem.order_line_id);
   check('mã có nhật ký thì bị chặn ITEM_HAS_ENTRIES',
     delEntries.ok === false && delEntries.error.code === 'ITEM_HAS_ENTRIES', JSON.stringify(delEntries));
+  await db.runAsync('DELETE FROM production_defects WHERE entry_id IN (SELECT id FROM production_entries WHERE order_line_id IN (?, ?))', [newItem.order_line_id, other.order_line_id]);
+  await db.runAsync('DELETE FROM production_entry_refs WHERE entry_id IN (SELECT id FROM production_entries WHERE order_line_id IN (?, ?))', [newItem.order_line_id, other.order_line_id]);
+  await db.runAsync('DELETE FROM production_entries WHERE order_line_id IN (?, ?)', [newItem.order_line_id, other.order_line_id]);
+  await q.removeItem(batchId, newItem.order_line_id);
 
   // ══════════════════════════════════════════════════════════════════════
   console.log('6) Container/kiện — `done` là cột, không mất tick khi đổi kiện');
@@ -147,11 +154,11 @@ try {
   check('tick được đọc lại', cvs[0].pallets[0].items[0].done === true);
   check('thêm kiện mới KHÔNG làm mất tick kiện cũ',
     cvs[0].pallets[0].items[0].done === true);
-  const newPal = await q.addPallet(cvs[0].id, { no: 999, items: [{ order_line_id: palLine.order_line_id, qty: 5 }] });
+  const newPal = await q.addPallet(batchId, cvs[0].id, { no: 999, items: [{ order_line_id: palLine.order_line_id, qty: 5 }] });
   check('thêm kiện thành công', newPal.ok, JSON.stringify(newPal.error));
   cvs = await q.fetchContainersView(batchId);
   check('tick vẫn còn sau khi thêm kiện', cvs[0].pallets[0].items[0].done === true);
-  await q.removePallet(cvs[0].id, 999);
+  await q.removePallet(batchId, cvs[0].id, 999);
 
   // ══════════════════════════════════════════════════════════════════════
   console.log('7) Hoàn tất đơn — INV-B1/INV-B3');
@@ -188,10 +195,8 @@ try {
   eq('… item_refs', await cnt('item_refs'), 0);
 
   // ══════════════════════════════════════════════════════════════════════
-  console.log('9) Lịch sử');
-  // ══════════════════════════════════════════════════════════════════════
-  await q.importPackingV1(batchId, dmac);
   const cur = (await db.getFirstAsync(`SELECT id FROM order_batches WHERE status='active'`)).id;
+  await q.importPackingV1(cur, dmac);
   const l2 = (await q.fetchItemsWithStats(cur)).find(i => i.ntk === '106235GF');
   await q.addEntry(l2.order_line_id, { date: '2026-10-04', qty: 60, line: 'manual', defectQty: 2, defectTypes: ['red'] });
   await q.addEntry(l2.order_line_id, { date: '2026-10-05', qty: 40, line: 'auto' });
@@ -204,7 +209,7 @@ try {
   const mon = await q.fetchHistoryGrouped('month');
   eq('nhóm tháng gộp cả 2 ngày', mon.find(m => m.groupKey === '2026-10')?.total, 100);
   const det = await q.fetchHistoryDetail('day', '2026-10-05');
-  eq('chi tiết 10/05 có 1 dòng, kèm PO', det.length === 1 && !!det[0].po, JSON.stringify(det));
+  check('chi tiết 10/05 có 1 dòng, kèm PO', det.length === 1 && !!det[0].po, JSON.stringify(det));
   check('năm có dữ liệu', (await q.fetchAvailableYears()).includes('2026'));
 } finally {
   try { await db?.closeAsync(); } catch { /* đã đóng */ }
