@@ -9,6 +9,7 @@ import {
   StyleSheet,
   Alert,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 /**
  * Modal lựa chọn mã PO để hoàn tất đơn hàng (FEAT-24).
@@ -122,8 +123,14 @@ export default function FinishOrderModal({
               style={[styles.quickBtn, { borderColor: theme.line, backgroundColor: theme.bg }]}
               onPress={handleSelectAll}
             >
+              <Ionicons
+                name={allSelected ? 'checkbox' : 'square-outline'}
+                size={15}
+                color={theme.accent}
+                style={{ marginRight: 4 }}
+              />
               <Text style={{ color: theme.accent, fontSize: 12, fontWeight: '700' }}>
-                {allSelected ? '☐ Bỏ chọn tất cả' : '☑ Chọn tất cả'}
+                {allSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
               </Text>
             </TouchableOpacity>
 
@@ -164,9 +171,11 @@ export default function FinishOrderModal({
                     activeOpacity={0.7}
                   >
                     <View style={styles.checkIconBox}>
-                      <Text style={{ fontSize: 16, color: checked ? theme.accent : theme.sub }}>
-                        {checked ? '☑' : '☐'}
-                      </Text>
+                      <Ionicons
+                        name={checked ? 'checkbox' : 'square-outline'}
+                        size={21}
+                        color={checked ? theme.accent : theme.sub}
+                      />
                     </View>
 
                     <View style={{ flex: 1, marginLeft: 8 }}>

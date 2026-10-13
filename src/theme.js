@@ -1,4 +1,4 @@
-// src/theme.js
+// src/theme.js — Classic Warm Industrial Palette
 export const light = {
   bg: '#efe7d6',
   card: '#fbf7ec',

@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, useColorScheme, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '@/store/useAppStore';
 import { getTheme } from '@/theme';
 import { fetchHistoryGrouped, fetchHistoryDetail } from '@/db/queries';
@@ -51,7 +52,10 @@ export default function HistoryScreen() {
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.bg }]} edges={['top']}>
       <ScrollView contentContainerStyle={styles.wrap}>
-        <Text style={[styles.h1, { color: theme.ink }]}>📊 Lịch sử</Text>
+        <View style={styles.headerTitleRow}>
+          <Ionicons name="stats-chart" size={22} color={theme.accent} style={{ marginRight: 8 }} />
+          <Text style={[styles.h1, { color: theme.ink }]}>Lịch sử sản xuất</Text>
+        </View>
 
         {/* Chức năng sao lưu & phục hồi dữ liệu JSON toàn bộ app */}
         <BackupRestoreSection theme={theme} onRestoreComplete={init} />
@@ -74,8 +78,12 @@ export default function HistoryScreen() {
             return (
               <View key={g.groupKey} style={[styles.card, { backgroundColor: theme.card, borderColor: theme.line }]}>
                 <TouchableOpacity style={styles.top} activeOpacity={0.7} onPress={() => toggleGroup(g.groupKey)}>
-                  <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 15 }}>{labelFor(g.groupKey)}</Text>
-                  <Text style={{ color: theme.accent, fontWeight: '700' }}>{g.total.toLocaleString()} pcs</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Ionicons name="calendar-outline" size={16} color={theme.accent} style={{ marginRight: 6 }} />
+                    <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 15.5 }}>{labelFor(g.groupKey)}</Text>
+                    <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={15} color={theme.sub} style={{ marginLeft: 5 }} />
+                  </View>
+                  <Text style={{ color: theme.accent, fontWeight: '800', fontSize: 15 }}>{g.total.toLocaleString()} pcs</Text>
                 </TouchableOpacity>
                 <View style={styles.numsRow}>
                   <Text style={{ color: theme.sub, fontSize: 12 }}>Thủ công: {g.manualTotal.toLocaleString()}</Text>
@@ -154,9 +162,20 @@ export default function HistoryScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   wrap: { padding: 14, paddingBottom: 40 },
-  h1: { fontSize: 19, fontWeight: '700', marginBottom: 4 },
-  card: { borderWidth: 1.5, borderRadius: 6, padding: 14, marginBottom: 10 },
-  top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  headerTitleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  h1: { fontSize: 19, fontWeight: '800', letterSpacing: -0.3 },
+  card: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 15,
+    marginBottom: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+  },
+  top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   numsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 8 },
   itemBlock: { paddingVertical: 6, borderTopWidth: 1 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },

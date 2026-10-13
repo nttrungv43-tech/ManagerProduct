@@ -35,7 +35,7 @@ export default function PoSummaryTable({ summaries, unattributed = 0, theme }) {
   return (
     <View style={[styles.wrap, { backgroundColor: theme.card, borderColor: theme.line }]}>
       <Text style={[styles.title, { color: theme.ink }]}>Tổng theo PO</Text>
-      <View style={[styles.head, { borderBottomColor: theme.line }]}>
+      <View style={[styles.head, { backgroundColor: theme.bg }]}>
         <Text style={[styles.th, styles.colPo, { color: theme.sub }]}>PO</Text>
         <Text style={[styles.th, styles.colNum, { color: theme.sub }]}>Tổng</Text>
         <Text style={[styles.th, styles.colNum, { color: theme.sub }]}>Đã sản xuất</Text>
@@ -77,14 +77,31 @@ export default function PoSummaryTable({ summaries, unattributed = 0, theme }) {
 }
 
 const styles = StyleSheet.create({
-  wrap: { marginTop: 10, borderWidth: 1, borderRadius: 6, paddingVertical: 10, paddingHorizontal: 12 },
-  title: { fontSize: 13, fontWeight: '700', marginBottom: 8 },
-  empty: { fontSize: 12, paddingVertical: 6 },
-  note: { fontSize: 10.5, paddingTop: 6, lineHeight: 14 },
-  head: { flexDirection: 'row', borderBottomWidth: 1, paddingBottom: 5 },
-  th: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-  row: { flexDirection: 'row', borderBottomWidth: 1, paddingVertical: 5 },
-  td: { fontSize: 11.5 },
-  colPo: { flex: 2.4 },
+  wrap: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+  },
+  title: { fontSize: 14, fontWeight: '800', marginBottom: 10, letterSpacing: 0.2 },
+  empty: { fontSize: 12.5, paddingVertical: 8 },
+  note: { fontSize: 11, paddingTop: 8, lineHeight: 16 },
+  head: {
+    flexDirection: 'row',
+    borderRadius: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    marginBottom: 4,
+  },
+  th: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
+  row: { flexDirection: 'row', borderBottomWidth: 1, paddingVertical: 8, paddingHorizontal: 6, alignItems: 'center' },
+  td: { fontSize: 13, fontWeight: '600' },
+  colPo: { flex: 2.2 },
   colNum: { flex: 1, textAlign: 'right' },
 });

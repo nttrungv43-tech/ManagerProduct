@@ -1,7 +1,7 @@
-// src/screens/ContainersScreen.js
 import React, { useState, useMemo } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '@/store/useAppStore';
 import { getTheme } from '@/theme';
 import { previewArchiveDelete } from '@/db/queries';
@@ -251,12 +251,16 @@ export default function ContainersScreen() {
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.bg }]} edges={['top']}>
       <ScrollView contentContainerStyle={styles.wrap}>
         <View style={styles.headerRow}>
-          <Text style={[styles.h1, { color: theme.ink }]}>📦 Container</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Ionicons name="cube" size={22} color={theme.accent} style={{ marginRight: 8 }} />
+            <Text style={[styles.h1, { color: theme.ink }]}>Container</Text>
+          </View>
           <TouchableOpacity
             style={[styles.addContainerBtn, { borderColor: theme.line, backgroundColor: theme.card }]}
             onPress={openAddContainer}
           >
-            <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>＋ Thêm container</Text>
+            <Ionicons name="add-circle-outline" size={16} color={theme.accent} style={{ marginRight: 4 }} />
+            <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>Thêm container</Text>
           </TouchableOpacity>
         </View>
         {/* FEAT-14 (AC-CONT-09): chip lọc PO chỉ có nghĩa khi đã có container. */}
@@ -303,8 +307,11 @@ export default function ContainersScreen() {
             <View key={c.id} style={[styles.card, { backgroundColor: theme.card, borderColor: theme.line }]}>
               <View style={styles.top}>
                 <TouchableOpacity style={{ flex: 1, paddingVertical: 2 }} onPress={() => toggleExpand(c.id)}>
-                  <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 16 }}>📦 {c.container_no}</Text>
-                  <Text style={{ color: theme.sub, fontSize: 11.5, marginTop: 2 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Ionicons name="cube-outline" size={17} color={theme.accent} style={{ marginRight: 6 }} />
+                    <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 16 }}>{c.container_no}</Text>
+                  </View>
+                  <Text style={{ color: theme.sub, fontSize: 12, marginTop: 3 }}>
                     PO {c.po}{c.seal_no ? ` · Seal: ${c.seal_no}` : ''}
                   </Text>
                 </TouchableOpacity>
@@ -313,12 +320,14 @@ export default function ContainersScreen() {
                     style={[styles.editContBtn, { borderColor: theme.line, backgroundColor: theme.bg }]}
                     onPress={() => openEditContainer(c)}
                   >
-                    <Text style={{ color: theme.accent, fontWeight: '600', fontSize: 12 }}>✏️ Sửa</Text>
+                    <Ionicons name="pencil" size={12} color={theme.accent} style={{ marginRight: 3 }} />
+                    <Text style={{ color: theme.accent, fontWeight: '600', fontSize: 12 }}>Sửa</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={() => toggleExpand(c.id)} style={{ paddingVertical: 4 }}>
+                  <TouchableOpacity onPress={() => toggleExpand(c.id)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 4 }}>
                     <Text style={{ color: isFull ? theme.good : theme.ink, fontWeight: '700', fontSize: 13.5 }}>
-                      {cDone}/{c.pallets.length} kiện {isOpen ? '▴' : '▾'}
+                      {cDone}/{c.pallets.length} kiện
                     </Text>
+                    <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={15} color={theme.sub} style={{ marginLeft: 3 }} />
                   </TouchableOpacity>
                 </View>
               </View>
@@ -336,7 +345,8 @@ export default function ContainersScreen() {
               {isOpen && (
                 <View style={{ marginTop: 10 }}>
                   <TouchableOpacity style={styles.addPalletBtn} onPress={() => openAddPallet(c)}>
-                    <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>＋ Thêm kiện</Text>
+                    <Ionicons name="add" size={15} color={theme.accent} style={{ marginRight: 4 }} />
+                    <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>Thêm kiện</Text>
                   </TouchableOpacity>
                   {sortedPallets.map(p => (
                     <PalletRow
@@ -354,17 +364,18 @@ export default function ContainersScreen() {
           );
         })}
 
-        <View style={[styles.finishBox, { backgroundColor: theme.card, borderColor: theme.ink }]}>
+        <View style={[styles.finishBox, { backgroundColor: theme.card, borderColor: theme.line }]}>
           <Text style={{ color: theme.sub, fontSize: 12, textAlign: 'center', marginBottom: 10 }}>
             Khi các mã PO hoặc đơn hàng ({done}/{total} kiện) đã xong, bấm để lựa chọn mã PO cần lưu trữ hoặc hoàn tất toàn bộ.
           </Text>
           <TouchableOpacity
-            style={[styles.finishBtn, { backgroundColor: theme.bad, opacity: finishing ? 0.6 : 1 }]}
+            style={[styles.finishBtn, { backgroundColor: theme.good, opacity: finishing ? 0.6 : 1 }]}
             onPress={handleFinish}
             disabled={finishing}
           >
-            <Text style={{ color: '#fff', fontWeight: '700' }}>
-              {finishing ? '⏳ Đang hoàn tất…' : '✅ Hoàn tất đơn hàng / chọn PO'}
+            <Ionicons name="checkmark-done-circle-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
+            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13.5 }}>
+              {finishing ? 'Đang hoàn tất…' : 'Hoàn tất đơn hàng / chọn PO'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -372,16 +383,20 @@ export default function ContainersScreen() {
         {archives.length > 0 && (
           <>
             <View style={styles.archiveHeadRow}>
-              <Text style={[styles.archiveHead, { color: theme.ink }]}>
-                📁 Đơn hàng đã lưu trữ ({archives.length})
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons name="archive-outline" size={16} color={theme.ink} style={{ marginRight: 6 }} />
+                <Text style={[styles.archiveHead, { color: theme.ink, marginBottom: 0 }]}>
+                  Đơn hàng đã lưu trữ ({archives.length})
+                </Text>
+              </View>
               {/* AC-ARCH-01: thu gọn / mở nội dung của TẤT CẢ thẻ lưu trữ. */}
               <TouchableOpacity
-                style={[styles.archiveTool, { borderColor: theme.line }]}
+                style={[styles.archiveTool, { borderColor: theme.line, backgroundColor: theme.card }]}
                 onPress={() => setArchivesAll(v => (v === false ? true : false))}
               >
+                <Ionicons name={archivesAll === false ? 'eye-outline' : 'eye-off-outline'} size={13} color={theme.accent} style={{ marginRight: 4 }} />
                 <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 11.5 }}>
-                  {archivesAll === false ? '👁 Hiện nội dung' : '👁 Ẩn nội dung'}
+                  {archivesAll === false ? 'Hiện nội dung' : 'Ẩn nội dung'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -455,18 +470,40 @@ export default function ContainersScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   wrap: { padding: 14, paddingBottom: 40 },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  h1: { fontSize: 19, fontWeight: '700' },
-  addContainerBtn: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
-  card: { borderWidth: 1.5, borderRadius: 6, padding: 14, marginBottom: 10 },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  h1: { fontSize: 19, fontWeight: '800', letterSpacing: -0.3 },
+  addContainerBtn: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 2,
+  },
+  card: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 15,
+    marginBottom: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+  },
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  editContBtn: { borderWidth: 1, borderRadius: 5, paddingHorizontal: 8, paddingVertical: 4 },
+  editContBtn: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5, flexDirection: 'row', alignItems: 'center' },
   numsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 9 },
-  emptyBox: { borderWidth: 1.5, borderRadius: 6, padding: 14, marginTop: 8, marginBottom: 10 },
-  finishBox: { borderWidth: 1.5, borderStyle: 'dashed', borderRadius: 6, padding: 14, marginVertical: 16 },
-  addPalletBtn: { paddingVertical: 8 },
-  finishBtn: { padding: 13, borderRadius: 4, alignItems: 'center' },
-  archiveHead: { fontSize: 13, fontWeight: '700', marginBottom: 8 },
-  archiveHeadRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  archiveTool: { borderWidth: 1, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 4 },
+  emptyBox: { borderWidth: 1, borderRadius: 12, padding: 16, marginTop: 8, marginBottom: 12 },
+  finishBox: { borderWidth: 1, borderRadius: 14, padding: 16, marginVertical: 16, elevation: 1 },
+  addPalletBtn: { paddingVertical: 9, flexDirection: 'row', alignItems: 'center' },
+  finishBtn: { padding: 13, borderRadius: 10, alignItems: 'center', justifyContent: 'center', flexDirection: 'row' },
+  archiveHead: { fontSize: 14, fontWeight: '800', marginBottom: 8 },
+  archiveHeadRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  archiveTool: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, flexDirection: 'row', alignItems: 'center' },
 });

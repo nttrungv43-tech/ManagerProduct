@@ -4,7 +4,7 @@
 //
 // Vì sao cần test: `toISOString()` trả ngày theo **UTC**. Ở UTC+7 (Việt Nam),
 // 00:00–06:59 sáng là ngày hôm trước theo UTC ⇒ ngày nhật ký/ngày hoàn tất đơn bị sai.
-import { todayLocal, isDateString, formatDisplayDate } from '../src/utils/date.js';
+import { todayLocal, isDateString, formatDisplayDate, yesterdayLocal, isToday, isYesterday, dateLabel } from '../src/utils/date.js';
 
 let pass = 0;
 let fail = 0;
@@ -75,6 +75,32 @@ eq('có khoảng trắng thừa được trim', formatDisplayDate(' 2026-08-15 '
 eq('chuỗi không phải ngày thì giữ nguyên', formatDisplayDate('invalid-date'), 'invalid-date');
 eq('chuỗi rỗng trả về rỗng', formatDisplayDate(''), '');
 eq('null/undefined an toàn', formatDisplayDate(null), '');
+
+// ---------- 6. yesterdayLocal ----------
+console.log('6) yesterdayLocal');
+eq('hôm qua của 2026-09-02 là 2026-09-01', yesterdayLocal(new Date(2026, 8, 2)), '2026-09-01');
+eq('hôm qua của 2026-01-01 lùi về 2025-12-31', yesterdayLocal(new Date(2026, 0, 1)), '2025-12-31');
+eq('hôm qua của 2026-03-01 lùi về 2026-02-28', yesterdayLocal(new Date(2026, 2, 1)), '2026-02-28');
+
+// ---------- 7. isToday & isYesterday ----------
+console.log('7) isToday & isYesterday');
+{
+  const refDate = new Date(2026, 9, 13);
+  check('đúng hôm nay', isToday('2026-10-13', refDate) === true);
+  check('không phải hôm nay', isToday('2026-10-12', refDate) === false);
+  check('đúng hôm qua', isYesterday('2026-10-12', refDate) === true);
+  check('hôm nay không phải hôm qua', isYesterday('2026-10-13', refDate) === false);
+}
+
+// ---------- 8. dateLabel ----------
+console.log('8) dateLabel');
+{
+  const refDate = new Date(2026, 9, 13);
+  eq('nhãn hôm nay', dateLabel('2026-10-13', refDate), 'Hôm nay (13-10-2026)');
+  eq('nhãn hôm qua', dateLabel('2026-10-12', refDate), 'Hôm qua (12-10-2026)');
+  eq('nhãn ngày khác', dateLabel('2026-10-05', refDate), '05-10-2026');
+  eq('rỗng', dateLabel(''), '');
+}
 
 console.log('\nKết quả: ' + `${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { File, Paths } from 'expo-file-system';
+import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '@/store/useAppStore';
 import {
   validateBackupPayload,
@@ -207,7 +208,10 @@ export default function BackupRestoreSection({ theme, onRestoreComplete }) {
   return (
     <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.line }]}>
       <View style={styles.header}>
-        <Text style={[styles.title, { color: theme.ink }]}>💾 Sao lưu & Phục hồi dữ liệu (JSON)</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+          <Ionicons name="shield-checkmark-outline" size={17} color={theme.accent} style={{ marginRight: 6 }} />
+          <Text style={[styles.title, { color: theme.ink, marginBottom: 0 }]}>Sao lưu & Phục hồi dữ liệu</Text>
+        </View>
         <Text style={[styles.desc, { color: theme.sub }]}>
           Sao lưu toàn bộ app (đơn hàng, mã hàng, kiện, nhật ký) ra file JSON để tránh mất dữ liệu hoặc chuyển sang máy khác.
         </Text>
@@ -222,7 +226,10 @@ export default function BackupRestoreSection({ theme, onRestoreComplete }) {
           {exporting ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
-            <Text style={styles.btnText}>💾 Sao lưu JSON</Text>
+            <View style={styles.btnInner}>
+              <Ionicons name="cloud-download-outline" size={16} color="#fff" style={{ marginRight: 5 }} />
+              <Text style={styles.btnText}>Sao lưu JSON</Text>
+            </View>
           )}
         </TouchableOpacity>
 
@@ -239,7 +246,10 @@ export default function BackupRestoreSection({ theme, onRestoreComplete }) {
           {restoring ? (
             <ActivityIndicator color={theme.accent} size="small" />
           ) : (
-            <Text style={[styles.btnText, { color: theme.accent }]}>📥 Phục hồi JSON</Text>
+            <View style={styles.btnInner}>
+              <Ionicons name="cloud-upload-outline" size={16} color={theme.accent} style={{ marginRight: 5 }} />
+              <Text style={[styles.btnText, { color: theme.accent }]}>Phục hồi JSON</Text>
+            </View>
           )}
         </TouchableOpacity>
       </View>
@@ -249,22 +259,27 @@ export default function BackupRestoreSection({ theme, onRestoreComplete }) {
 
 const styles = StyleSheet.create({
   card: {
-    borderWidth: 1.5,
-    borderRadius: 6,
-    padding: 12,
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
     marginBottom: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
   },
   header: {
     marginBottom: 10,
   },
   title: {
-    fontSize: 13.5,
-    fontWeight: '700',
-    marginBottom: 4,
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: -0.2,
   },
   desc: {
-    fontSize: 11.5,
-    lineHeight: 16,
+    fontSize: 12,
+    lineHeight: 17,
   },
   btnRow: {
     flexDirection: 'row',
@@ -272,9 +287,14 @@ const styles = StyleSheet.create({
   },
   btn: {
     flex: 1,
-    paddingVertical: 9,
+    paddingVertical: 10,
     paddingHorizontal: 12,
-    borderRadius: 6,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  btnInner: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -284,6 +304,6 @@ const styles = StyleSheet.create({
   btnText: {
     color: '#fff',
     fontWeight: '700',
-    fontSize: 12.5,
+    fontSize: 13,
   },
 });

@@ -1,15 +1,9 @@
 // src/components/ArchiveCard.js
 import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { fetchArchiveItems } from '@/db/queries';
 
-/**
- * Thẻ "Đơn hàng đã lưu trữ" (AC-CONT-08, mở rộng ở FEAT-15).
- *
- * FEAT-15: trạng thái mở/đóng do **cha** điều khiển qua props `expanded` + `onToggle`
- * để nút "👁 Ẩn/Hiện nội dung" của cả mục lưu trữ thu gọn/mở được mọi thẻ (AC-ARCH-03).
- * Nếu không truyền `expanded` thì thẻ tự quản lý như trước (giữ hành vi cũ).
- */
 export default function ArchiveCard({ archive, theme, expanded, onToggle, onDelete, busy }) {
   const [localExpanded, setLocalExpanded] = useState(false);
   const [items, setItems] = useState([]);
@@ -18,7 +12,6 @@ export default function ArchiveCard({ archive, theme, expanded, onToggle, onDele
   const isControlled = expanded !== undefined;
   const isOpen = isControlled ? !!expanded : localExpanded;
 
-  // Nạp chi tiết **một lần** cho mỗi thẻ (đợt mở đầu tiên). Thu gọn không xoá cache.
   useEffect(() => {
     if (!isOpen || loaded) return;
     let cancelled = false;
@@ -47,13 +40,11 @@ export default function ArchiveCard({ archive, theme, expanded, onToggle, onDele
               PO: {archive.po_codes}
             </Text>
           )}
-          <Text style={{ color: theme.sub, fontSize: 11, marginTop: 2 }}>
+          <Text style={{ color: theme.sub, fontSize: 11.5, marginTop: 3 }}>
             {archive.total_produced.toLocaleString()}/{archive.total_target.toLocaleString()} pcs ·{' '}
             {archive.pallets_done}/{archive.pallets_total} kiện · Lỗi {archive.total_defect.toLocaleString()}
           </Text>
         </View>
-        {/* Vùng chạm tách biệt: nút xoá KHÔNG nằm trong TouchableOpacity mở nội dung
-            ⇒ không xoá nhầm khi người dùng chỉ muốn xem (AC-ARCH-02). */}
         <View style={styles.actions}>
           {onDelete && (
             <TouchableOpacity
@@ -62,20 +53,22 @@ export default function ArchiveCard({ archive, theme, expanded, onToggle, onDele
               disabled={busy}
               accessibilityLabel={`Xoá đơn hoàn tất ngày ${archive.finished_date}`}
             >
-              <Text style={{ color: theme.bad, fontWeight: '700', fontSize: 13 }}>
-                {busy ? '⏳' : '🗑'}
-              </Text>
+              {busy ? (
+                <ActivityIndicator size="small" color={theme.bad} />
+              ) : (
+                <Ionicons name="trash-outline" size={17} color={theme.bad} />
+              )}
             </TouchableOpacity>
           )}
-          <Text style={{ color: theme.sub, marginLeft: 6 }}>{isOpen ? '▴' : '▾'}</Text>
+          <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={16} color={theme.sub} style={{ marginLeft: 6 }} />
         </View>
       </TouchableOpacity>
       {isOpen && (
         <View style={{ marginTop: 10 }}>
           {items.map(it => (
             <View key={it.ntk} style={[styles.row, { borderTopColor: theme.line }]}>
-              <Text style={{ color: theme.sub, fontSize: 12 }}>Mã {it.ntk}</Text>
-              <Text style={{ color: theme.sub, fontSize: 12 }}>
+              <Text style={{ color: theme.sub, fontSize: 12.5 }}>Mã {it.ntk}</Text>
+              <Text style={{ color: theme.sub, fontSize: 12.5 }}>
                 {it.produced}/{it.target} pcs{it.defect ? ` · Lỗi ${it.defect}` : ''}
               </Text>
             </View>
@@ -87,10 +80,20 @@ export default function ArchiveCard({ archive, theme, expanded, onToggle, onDele
 }
 
 const styles = StyleSheet.create({
-  card: { borderWidth: 1.5, borderRadius: 6, padding: 14, marginBottom: 10 },
+  card: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 15,
+    marginBottom: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+  },
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   info: { flex: 1, paddingRight: 8 },
   actions: { flexDirection: 'row', alignItems: 'center' },
   delBtn: { paddingHorizontal: 8, paddingVertical: 4 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5, borderTopWidth: 1 },
+  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderTopWidth: 1 },
 });

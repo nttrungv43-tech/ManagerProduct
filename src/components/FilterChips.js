@@ -13,10 +13,20 @@ export default function FilterChips({ options, activeValue, onSelect, theme }) {
             onPress={() => onSelect(value)}
             style={[
               styles.chip,
-              { borderColor: theme.line, backgroundColor: active ? theme.accent : theme.card },
+              {
+                borderColor: active ? theme.accent : theme.line,
+                backgroundColor: active ? theme.accent : theme.card,
+                elevation: active ? 3 : 1,
+                shadowColor: active ? theme.accent : '#000',
+                shadowOffset: { width: 0, height: 1 },
+                shadowOpacity: active ? 0.25 : 0.03,
+                shadowRadius: 2,
+              },
             ]}
           >
-            <Text style={{ color: active ? '#fff' : theme.sub, fontSize: 13, fontWeight: '600' }}>{label}</Text>
+            <Text style={{ color: active ? '#fff' : theme.sub, fontSize: 13, fontWeight: active ? '700' : '600' }}>
+              {label}
+            </Text>
           </TouchableOpacity>
         );
       })}
@@ -26,12 +36,13 @@ export default function FilterChips({ options, activeValue, onSelect, theme }) {
 
 const styles = StyleSheet.create({
   chip: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
     borderRadius: 999,
     borderWidth: 1,
-    marginRight: 6,
+    marginRight: 8,
     minHeight: 38,
     justifyContent: 'center',
+    alignItems: 'center',
   },
 });

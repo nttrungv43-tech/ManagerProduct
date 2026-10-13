@@ -1,17 +1,8 @@
 // src/components/PalletRow.js
-// FEAT-21 — Trạng thái đóng kiện là **cột `pallet_lines.done`**, không phải khoá mã hoá.
-//
-// Bản cũ dựng khoá `${containerId}-${palletNo}` (kiện 1 mã) hoặc
-// `${containerId}-${palletNo}-${ntk}` (kiện nhiều mã) rồi tra `palletDoneMap[khoá]`. Hệ quả đo
-// được: thêm/xoá một dòng hàng trong kiện là **đổi khoá**, phải có `remapPalletStatus()` dựng lại
-// cả map trong cùng transaction — 99 dòng code chỉ để giữ một cái tick (BUG-01, migration v2).
-//
-// Ở đây mỗi dòng hàng trong kiện có `id` riêng (`pallet_lines.id`) và `done` nằm ngay trên dòng đó:
-//   • kiện 1 mã  → đúng 1 dòng → tick dòng = tick kiện (giữ nguyên hành vi và giao diện cũ).
-//   • kiện nhiều mã → tick từng dòng (giữ nguyên hành vi và giao diện cũ).
-// Không còn chuỗi khoá ⇒ không còn đường để mất tick (hết INV-P1).
+// FEAT-21 — Trạng thái đóng kiện là cột pallet_lines.done
 import React from 'react';
 import { View, Text, TouchableOpacity, Alert, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 export default function PalletRow({
   pallet, onToggleLine, onEditPallet, onDeletePallet, theme,
@@ -31,24 +22,23 @@ export default function PalletRow({
     );
   }
 
-  // FEAT-10: nút sửa/xoá kiện. Không hiện ở thẻ lưu trữ (INV-B2 — chỉ truyền ở batch active).
   const actions = (onEditPallet || onDeletePallet) ? (
     <View style={styles.actions}>
       {onEditPallet && (
         <TouchableOpacity style={styles.actionBtn} onPress={() => onEditPallet(pallet)}>
-          <Text style={{ color: theme.accent, fontWeight: '600', fontSize: 12 }}>✎ Sửa</Text>
+          <Ionicons name="pencil" size={12} color={theme.accent} style={{ marginRight: 3 }} />
+          <Text style={{ color: theme.accent, fontWeight: '600', fontSize: 12 }}>Sửa</Text>
         </TouchableOpacity>
       )}
       {onDeletePallet && (
         <TouchableOpacity style={styles.actionBtn} onPress={() => onDeletePallet(pallet)}>
-          <Text style={{ color: theme.bad, fontWeight: '600', fontSize: 12 }}>🗑 Xoá</Text>
+          <Ionicons name="trash-outline" size={12} color={theme.bad} style={{ marginRight: 3 }} />
+          <Text style={{ color: theme.bad, fontWeight: '600', fontSize: 12 }}>Xoá</Text>
         </TouchableOpacity>
       )}
     </View>
   ) : null;
 
-  // `pallet_no` là tên cột; đổi tên ở tầng query (`id`, `pallet_no`) nhưng alias lại cho
-  // component để không phải sửa mọi chỗ đọc `pallet.no`.
   const palletNo = pallet.pallet_no ?? pallet.no;
 
   if (pallet.items.length > 1) {
@@ -67,7 +57,7 @@ export default function PalletRow({
         >
           Kiện {palletNo} — {qty} pcs ({pallet.items.length} loại hàng)
         </Text>
-        <View style={{ marginTop: 6, gap: 6 }}>
+        <View style={{ marginTop: 8, gap: 8 }}>
           {pallet.items.map(it => (
             <TouchableOpacity
               key={it.id}
@@ -83,13 +73,13 @@ export default function PalletRow({
                   },
                 ]}
               >
-                {it.done && <Text style={{ color: '#fff', fontSize: 11 }}>✓</Text>}
+                {it.done && <Ionicons name="checkmark" size={15} color="#fff" />}
               </View>
               <Text
                 style={{
                   color: it.done ? theme.good : theme.ink,
-                  fontSize: 12,
-                  fontWeight: it.done ? '400' : '500',
+                  fontSize: 12.5,
+                  fontWeight: it.done ? '400' : '600',
                   textDecorationLine: it.done ? 'line-through' : 'none',
                   opacity: it.done ? 0.8 : 1,
                 }}
@@ -104,7 +94,7 @@ export default function PalletRow({
     );
   }
 
-  // Kiện một mã: dùng chính dòng hàng đó làm đơn vị tick — không cần nhân bản trạng thái.
+  // Kiện một mã
   const line = pallet.items[0];
   const done = !!line?.done;
   const itemsTxt = pallet.items.map(it => `${it.ntk} × ${it.qty}`).join(', ');
@@ -120,12 +110,12 @@ export default function PalletRow({
             style={[
               styles.checkLg,
               {
-                borderColor: done ? theme.good : theme.ink,
+                borderColor: done ? theme.good : theme.line,
                 backgroundColor: done ? theme.good : theme.bg,
               },
             ]}
           >
-            {done && <Text style={{ color: '#fff' }}>✓</Text>}
+            {done && <Ionicons name="checkmark" size={18} color="#fff" />}
           </View>
           <View style={{ flex: 1 }}>
             <Text
@@ -143,7 +133,7 @@ export default function PalletRow({
             <Text
               style={{
                 color: done ? theme.good : theme.sub,
-                fontSize: 11.5,
+                fontSize: 12,
                 marginTop: 2,
                 textDecorationLine: done ? 'line-through' : 'none',
                 opacity: done ? 0.8 : 1,
@@ -160,12 +150,26 @@ export default function PalletRow({
 }
 
 const styles = StyleSheet.create({
-  row: { paddingVertical: 11, borderTopWidth: 1 },
-  palletHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  title: { fontSize: 13.5, fontWeight: '700' },
-  checkLg: { width: 24, height: 24, borderRadius: 4, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
-  checkSm: { width: 18, height: 18, borderRadius: 4, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
-  subRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  actions: { flexDirection: 'row', gap: 16, marginTop: 8 },
-  actionBtn: { paddingVertical: 2 },
+  row: { paddingVertical: 12, borderTopWidth: 1 },
+  palletHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  title: { fontSize: 14, fontWeight: '700' },
+  checkLg: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkSm: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  actions: { flexDirection: 'row', gap: 16, marginTop: 8, paddingLeft: 40 },
+  actionBtn: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
 });

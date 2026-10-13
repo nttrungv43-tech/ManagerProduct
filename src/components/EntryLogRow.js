@@ -1,6 +1,6 @@
-// src/components/EntryLogRow.js
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { formatDisplayDate } from '@/utils/date';
 
 export default function EntryLogRow({ entry, po, onEdit, onDelete, theme }) {
   const lineLabel = entry.line === 'auto' ? 'Tự động' : 'Thủ công';
@@ -12,7 +12,7 @@ export default function EntryLogRow({ entry, po, onEdit, onDelete, theme }) {
   return (
     <View style={[styles.row, { borderTopColor: theme.line }]}>
       <Text style={{ color: theme.sub, fontSize: 12, flex: 1 }}>
-        {entry.date} — {entry.qty} pcs · {lineLabel}
+        {formatDisplayDate(entry.date)} — {entry.qty} pcs · {lineLabel}
         {/* PO truyền từ thẻ cha: mọi nhật ký đã thuộc đúng một dòng đơn hàng nên không còn khả năng
             "chưa gắn PO" (hết từ FEAT-21). Trước đó dòng này đọc `entry.po` — cột không được chọn ⇒
             luôn hiện "chưa gắn PO", tức sai. */}

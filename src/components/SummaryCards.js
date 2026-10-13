@@ -6,17 +6,28 @@ import ProgressBar from '@/components/ProgressBar';
 export default function SummaryCards({ totals, theme }) {
   const { totalTarget, totalProduced, overallPct, totalDefect } = totals;
   const cards = [
-    { num: totalTarget.toLocaleString(), lbl: 'Kế hoạch' },
-    { num: totalProduced.toLocaleString(), lbl: 'Đã sản xuất' },
-    { num: `${overallPct}%`, lbl: 'Hoàn thành' },
+    { num: totalTarget.toLocaleString(), lbl: 'Kế hoạch', color: theme.ink },
+    { num: totalProduced.toLocaleString(), lbl: 'Đã sản xuất', color: theme.accent },
+    { num: `${overallPct}%`, lbl: 'Hoàn thành', color: theme.good },
     { num: totalDefect.toLocaleString(), lbl: 'Hàng lỗi', color: theme.bad },
   ];
   return (
-    <View>
+    <View style={styles.container}>
       <View style={styles.row}>
         {cards.map((c, i) => (
-          <View key={i} style={[styles.card, { backgroundColor: theme.card, borderColor: theme.ink }]}>
-            <Text style={[styles.num, { color: c.color || theme.ink }]}>{c.num}</Text>
+          <View
+            key={i}
+            style={[
+              styles.card,
+              {
+                backgroundColor: theme.card,
+                borderColor: theme.line,
+              },
+            ]}
+          >
+            <Text style={[styles.num, { color: c.color }]} numberOfLines={1} adjustsFontSizeToFit>
+              {c.num}
+            </Text>
             <Text style={[styles.lbl, { color: theme.sub }]}>{c.lbl}</Text>
           </View>
         ))}
@@ -27,8 +38,36 @@ export default function SummaryCards({ totals, theme }) {
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', gap: 6 },
-  card: { flex: 1, borderWidth: 1.5, borderRadius: 4, paddingVertical: 10, alignItems: 'center' },
-  num: { fontSize: 18, fontWeight: '700' },
-  lbl: { fontSize: 9.5, marginTop: 2, textAlign: 'center' },
+  container: {
+    marginVertical: 4,
+  },
+  row: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  card: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+  },
+  num: {
+    fontSize: 17,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+  },
+  lbl: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 4,
+    textAlign: 'center',
+  },
 });

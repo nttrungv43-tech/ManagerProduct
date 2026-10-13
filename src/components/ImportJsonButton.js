@@ -1,10 +1,9 @@
 // src/components/ImportJsonButton.js
 import React, { useState } from 'react';
-import { TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { View, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-// BUGFIX-07: `readAsStringAsync` ở gói gốc đã bị xoá (ném lỗi) trong expo-file-system 57.
-// Dùng `File.text()` — https://docs.expo.dev/versions/v54.0.0/sdk/filesystem/
 import { File } from 'expo-file-system';
+import { Ionicons } from '@expo/vector-icons';
 import {
   detectFormat, detectFormatError, estimateImportCount,
   FORMAT_ENTRIES, FORMAT_PACKING_V1,
@@ -28,7 +27,6 @@ export default function ImportJsonButton({ onImport, hasContainerData, theme }) 
     try {
       jsonContent = await new File(asset.uri).text();
     } catch (_e) {
-      // Lưới an toàn cuối cùng: URI `file://` chỉ đọc được qua fetch trên một số nền tảng.
       try {
         const response = await fetch(asset.uri);
         jsonContent = await response.text();
@@ -46,8 +44,6 @@ export default function ImportJsonButton({ onImport, hasContainerData, theme }) 
       return;
     }
 
-    // FEAT-16 AC-FMT-01: báo lỗi ngay khi file sai định dạng, kèm cách sửa — thay vì để
-    // `queries.js` ném *"Không tìm thấy mã hàng nào trong file JSON."* sau khi đã bấm Nhập.
     const fmt = detectFormat(parsed);
     const formatError = detectFormatError(parsed, asset.name);
     if (formatError) {
@@ -75,13 +71,11 @@ export default function ImportJsonButton({ onImport, hasContainerData, theme }) 
                 return;
               }
               if (fmt === FORMAT_ENTRIES) {
-                // FEAT-09: báo riêng số mục bị bỏ qua vì vượt đơn đặt hàng.
                 const over = (res?.skippedOver ?? 0) > 0
                   ? `\nVượt đơn đặt hàng: ${res.skippedOver} mục bị bỏ qua.`
                   : '';
                 Alert.alert('Hoàn tất', `Đã nhập: ${res?.imported ?? 0} mục.\nBỏ qua: ${res?.skipped ?? 0} mục.${over}`);
               } else {
-                // FEAT-17: báo thêm số shipment + cảnh báo mã thuộc nhiều PO (nhãn PO dạng `A+B`).
                 const v1 = fmt === FORMAT_PACKING_V1;
                 const multiPo = v1 && (res?.multiPoItems ?? 0) > 0
                   ? `\n${res.multiPoItems} mã thuộc nhiều PO (hiển thị dạng A+B).`
@@ -110,7 +104,10 @@ export default function ImportJsonButton({ onImport, hasContainerData, theme }) 
       {loading ? (
         <ActivityIndicator color="#fff" size="small" />
       ) : (
-        <Text style={styles.btnText}>📥 Nhập JSON</Text>
+        <View style={styles.btnContent}>
+          <Ionicons name="cloud-upload-outline" size={17} color="#fff" style={{ marginRight: 6 }} />
+          <Text style={styles.btnText}>Nhập JSON</Text>
+        </View>
       )}
     </TouchableOpacity>
   );
@@ -120,9 +117,18 @@ const styles = StyleSheet.create({
   btn: {
     alignSelf: 'flex-start',
     paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10,
+    paddingVertical: 9,
+    borderRadius: 999,
     marginBottom: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+  },
+  btnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   btnText: {
     color: '#fff',

@@ -1,7 +1,20 @@
 // src/components/ItemEditSheet.js
 // FEAT-10 — Form thêm / sửa / xoá mã hàng và số lượng kế hoạch.
 import React, { useState } from 'react';
-import { Modal, View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import {
+  Modal,
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  KeyboardAvoidingView,
+  ScrollView,
+  Platform,
+  TouchableWithoutFeedback,
+  Keyboard,
+} from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { parseQty } from '@/utils/validateQty';
 import { itemErrorMessage, confirmDeleteItem } from '@/utils/deleteItem';
@@ -71,102 +84,125 @@ export default function ItemEditSheet({ item, pos, defaultPo, onClose, onSubmit,
 
   return (
     <Modal visible animationType="slide" transparent onRequestClose={onClose}>
-      <View style={[styles.backdrop, { backgroundColor: '#0006' }]}>
-        <View style={[styles.sheet, { backgroundColor: theme.card, borderColor: theme.line }]}>
-          <Text style={[styles.title, { color: theme.ink }]}>
-            {isEdit ? `Sửa mã ${item.ntk}` : 'Thêm mã hàng'}
-          </Text>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.keyboardAvoid}
+      >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View style={[styles.backdrop, { backgroundColor: '#0006' }]}>
+            <TouchableWithoutFeedback onPress={e => e.stopPropagation()}>
+              <View style={[styles.sheet, { backgroundColor: theme.card, borderColor: theme.line }]}>
+                <ScrollView
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                  bounces={false}
+                >
+                  <Text style={[styles.title, { color: theme.ink }]}>
+                    {isEdit ? `Sửa mã ${item.ntk}` : 'Thêm mã hàng'}
+                  </Text>
 
-          <Text style={styles.label(theme)}>Mã hàng</Text>
-          <TextInput
-            style={styles.input(theme)}
-            placeholder="VD: 106160"
-            placeholderTextColor={theme.sub}
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={ntk}
-            onChangeText={setNtk}
-          />
+                  <Text style={styles.label(theme)}>Mã hàng</Text>
+                  <TextInput
+                    style={styles.input(theme)}
+                    placeholder="VD: 106160"
+                    placeholderTextColor={theme.sub}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    value={ntk}
+                    onChangeText={setNtk}
+                  />
 
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, marginBottom: 6 }}>
-            <Text style={styles.labelNoMargin(theme)}>PO</Text>
-            {poOptions.length > 0 && (
-              <TouchableOpacity onPress={() => setIsNewPo(!isNewPo)}>
-                <Text style={{ color: theme.accent, fontSize: 12, fontWeight: '600' }}>
-                  {isNewPo ? 'Chọn PO có sẵn' : '＋ Nhập PO mới'}
-                </Text>
-              </TouchableOpacity>
-            )}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, marginBottom: 6 }}>
+                    <Text style={styles.labelNoMargin(theme)}>PO</Text>
+                    {poOptions.length > 0 && (
+                      <TouchableOpacity onPress={() => setIsNewPo(!isNewPo)}>
+                        <Text style={{ color: theme.accent, fontSize: 12, fontWeight: '600' }}>
+                          {isNewPo ? 'Chọn PO có sẵn' : '＋ Nhập PO mới'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
+                  {isNewPo || poOptions.length === 0 ? (
+                    <TextInput
+                      style={styles.input(theme)}
+                      placeholder="VD: 2919 hoặc PO2600189"
+                      placeholderTextColor={theme.sub}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      value={customPo}
+                      onChangeText={setCustomPo}
+                    />
+                  ) : (
+                    <View style={[styles.pickerWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
+                      <Picker selectedValue={po} onValueChange={setPo} style={{ color: theme.ink }}>
+                        <Picker.Item label="— Chọn PO —" value={PO_PLACEHOLDER} />
+                        {poOptions.map(p => <Picker.Item key={p} label={p} value={p} />)}
+                      </Picker>
+                    </View>
+                  )}
+
+                  <Text style={styles.label(theme)}>Số lượng kế hoạch</Text>
+                  <TextInput
+                    style={styles.input(theme)}
+                    keyboardType="numeric"
+                    placeholder="VD: 1000"
+                    placeholderTextColor={theme.sub}
+                    value={target}
+                    onChangeText={setTarget}
+                  />
+
+                  <View style={styles.btnRow}>
+                    <TouchableOpacity
+                      style={[styles.btn, { backgroundColor: theme.sub }]}
+                      onPress={onClose}
+                      disabled={busy}
+                    >
+                      <Text style={styles.btnTxt}>Huỷ</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.btn, { backgroundColor: theme.accent, opacity: busy ? 0.6 : 1 }]}
+                      onPress={handleSave}
+                      disabled={busy}
+                    >
+                      <Text style={styles.btnTxt}>{isEdit ? 'Lưu' : 'Thêm'}</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {isEdit && (
+                    <TouchableOpacity
+                      style={[styles.btn, { backgroundColor: theme.bad, marginTop: 8, opacity: busy ? 0.6 : 1 }]}
+                      onPress={handleDelete}
+                      disabled={busy}
+                    >
+                      <Text style={styles.btnTxt}>Xoá mã hàng</Text>
+                    </TouchableOpacity>
+                  )}
+                </ScrollView>
+              </View>
+            </TouchableWithoutFeedback>
           </View>
-
-          {isNewPo || poOptions.length === 0 ? (
-            <TextInput
-              style={styles.input(theme)}
-              placeholder="VD: 2919 hoặc PO2600189"
-              placeholderTextColor={theme.sub}
-              autoCapitalize="none"
-              autoCorrect={false}
-              value={customPo}
-              onChangeText={setCustomPo}
-            />
-          ) : (
-            <View style={[styles.pickerWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
-              <Picker selectedValue={po} onValueChange={setPo} style={{ color: theme.ink }}>
-                <Picker.Item label="— Chọn PO —" value={PO_PLACEHOLDER} />
-                {poOptions.map(p => <Picker.Item key={p} label={p} value={p} />)}
-              </Picker>
-            </View>
-          )}
-
-          <Text style={styles.label(theme)}>Số lượng kế hoạch</Text>
-          <TextInput
-            style={styles.input(theme)}
-            keyboardType="numeric"
-            placeholder="VD: 1000"
-            placeholderTextColor={theme.sub}
-            value={target}
-            onChangeText={setTarget}
-          />
-
-          <View style={styles.btnRow}>
-            <TouchableOpacity
-              style={[styles.btn, { backgroundColor: theme.sub }]}
-              onPress={onClose}
-              disabled={busy}
-            >
-              <Text style={styles.btnTxt}>Huỷ</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.btn, { backgroundColor: theme.accent, opacity: busy ? 0.6 : 1 }]}
-              onPress={handleSave}
-              disabled={busy}
-            >
-              <Text style={styles.btnTxt}>{isEdit ? 'Lưu' : 'Thêm'}</Text>
-            </TouchableOpacity>
-          </View>
-
-          {isEdit && (
-            <TouchableOpacity
-              style={[styles.btn, { backgroundColor: theme.bad, marginTop: 8, opacity: busy ? 0.6 : 1 }]}
-              onPress={handleDelete}
-              disabled={busy}
-            >
-              <Text style={styles.btnTxt}>Xoá mã hàng</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  keyboardAvoid: { flex: 1 },
   backdrop: { flex: 1, justifyContent: 'flex-end' },
-  sheet: { borderTopLeftRadius: 16, borderTopRightRadius: 16, borderWidth: 1, padding: 18, paddingBottom: 34 },
+  sheet: {
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    borderWidth: 1,
+    padding: 18,
+    paddingBottom: 34,
+    maxHeight: '90%',
+  },
   title: { fontSize: 17, fontWeight: '700', marginBottom: 4 },
   label: theme => ({ color: theme.sub, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', marginTop: 14, marginBottom: 6 }),
   labelNoMargin: theme => ({ color: theme.sub, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }),
-  input: theme => ({ borderWidth: 1, borderColor: theme.line, backgroundColor: theme.bg, color: theme.ink, borderRadius: 10, padding: 12, fontSize: 15 }),
+  input: theme => ({ borderWidth: 1, borderColor: theme.line, backgroundColor: theme.bg, color: theme.ink, borderRadius: 10, padding: 12, fontSize: 16, fontWeight: '600' }),
   pickerWrap: { borderWidth: 1, borderRadius: 10, overflow: 'hidden', justifyContent: 'center' },
   btnRow: { flexDirection: 'row', gap: 10, marginTop: 20 },
   btn: { flex: 1, paddingVertical: 13, borderRadius: 8, alignItems: 'center' },

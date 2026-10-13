@@ -1,8 +1,10 @@
 import React, { useState, useRef } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Keyboard } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
+import { Ionicons } from '@expo/vector-icons';
 import ProgressBar from '@/components/ProgressBar';
 import EntryLogRow from '@/components/EntryLogRow';
+import DateSelectorBar from '@/components/DateSelectorBar';
 import { pctClass } from '@/store/useAppStore';
 import { fetchEntriesForLine } from '@/db/queries';
 import {
@@ -83,8 +85,10 @@ export default function ItemCard({
   onDeleteEntry,
   onEditItem,
   onDeleteItem,
+  onFocusElement,
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(todayLocal());
   const [qty, setQty] = useState('');
   const [line, setLine] = useState('manual');
   const [defectQty, setDefectQty] = useState('');
@@ -93,6 +97,18 @@ export default function ItemCard({
   const [submittingRef, setSubmittingRef] = useState(null);
   const qtyInputRef = useRef(null);
   const defectQtyInputRef = useRef(null);
+  const mainInputWrapRef = useRef(null);
+  const refCardMap = useRef({});
+  const editLogWrapRef = useRef(null);
+  const [focusedKey, setFocusedKey] = useState(null);
+
+  const handleFocus = targetRef => {
+    if (onFocusElement && targetRef?.current) {
+      setTimeout(() => {
+        onFocusElement(targetRef);
+      }, 120);
+    }
+  };
   const [logOpen, setLogOpen] = useState(false);
   const [entries, setEntries] = useState([]);
   const [editingId, setEditingId] = useState(null);
@@ -200,7 +216,7 @@ export default function ItemCard({
       const lineVal = refLine[key] || 'manual';
 
       const res = await onAddEntry(item.order_line_id, {
-        date: todayLocal(),
+        date: selectedDate || todayLocal(),
         qty: q,
         line: lineVal,
         defectQty: dq,
@@ -258,7 +274,7 @@ export default function ItemCard({
     try {
       const types = Object.keys(defectTypes).filter(k => defectTypes[k]);
       const res = await onAddEntry(item.order_line_id, {
-        date: todayLocal(),
+        date: selectedDate || todayLocal(),
         qty: q, line, defectQty: dq, defectTypes: dq > 0 ? types : [],
       });
       // Vượt đơn đặt hàng: giữ nguyên ô nhập để người dùng sửa lại.
@@ -384,9 +400,12 @@ export default function ItemCard({
           ]}
         >
           <View style={styles.lastUpdatedRow}>
-            <Text style={[styles.lastUpdatedTitle, { color: theme.good }]}>
-              ⚡ VỪA CẬP NHẬT (PO {item.po})
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Ionicons name="flash" size={13} color={theme.good} style={{ marginRight: 4 }} />
+              <Text style={[styles.lastUpdatedTitle, { color: theme.good }]}>
+                VỪA CẬP NHẬT (PO {item.po})
+              </Text>
+            </View>
             {lastUpdatedInfo?.time ? (
               <Text style={{ color: theme.good, fontSize: 11.5, fontWeight: '700' }}>
                 lúc {lastUpdatedInfo.time}
@@ -411,7 +430,15 @@ export default function ItemCard({
             </View>
           </View>
         </View>
-        <Text style={styles.pctText(theme, pctColor)}>{pct}% {expanded ? '▴' : '▾'}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Text style={styles.pctText(theme, pctColor)}>{pct}%</Text>
+          <Ionicons
+            name={expanded ? 'chevron-up' : 'chevron-down'}
+            size={16}
+            color={pctColor}
+            style={{ marginLeft: 4 }}
+          />
+        </View>
       </TouchableOpacity>
 
 
@@ -455,8 +482,9 @@ export default function ItemCard({
         <View style={styles.editRow}>
           {onEditItem && (
             <TouchableOpacity style={styles.editBtn} onPress={() => onEditItem(item)}>
+              <Ionicons name="pencil" size={13} color={theme.accent} style={{ marginRight: 4 }} />
               <Text style={{ color: theme.accent, fontWeight: '600', fontSize: 12.5 }}>
-                ✎ Sửa mã hàng & số lượng
+                Sửa mã hàng & số lượng
               </Text>
             </TouchableOpacity>
           )}
@@ -465,8 +493,9 @@ export default function ItemCard({
               style={styles.editBtn}
               onPress={() => confirmDeleteItem({ item, onDelete: onDeleteItem, alert: Alert })}
             >
+              <Ionicons name="trash-outline" size={13} color={theme.bad} style={{ marginRight: 4 }} />
               <Text style={{ color: theme.bad, fontWeight: '600', fontSize: 12.5 }}>
-                ✕ Xoá mã hàng
+                Xoá mã hàng
               </Text>
             </TouchableOpacity>
           )}
@@ -477,8 +506,13 @@ export default function ItemCard({
         <View>
           {/* A. Mã hàng KHÔNG có số hiệu → hiển thị form nhập tổng (AC-RF-10) */}
           {!hasRefs && (
-            <>
-              <Text style={styles.sectionLabel(theme)}>Nhập sản xuất hôm nay</Text>
+            <View ref={mainInputWrapRef}>
+              <Text style={styles.sectionLabel(theme)}>Nhập sản lượng sản xuất</Text>
+              <DateSelectorBar
+                selectedDate={selectedDate}
+                onSelectDate={setSelectedDate}
+                theme={theme}
+              />
               <View style={[styles.poNoticeBanner, { backgroundColor: theme.bg, borderColor: theme.line }]}>
                 <Text style={{ color: theme.sub, fontSize: 12 }}>
                   Đang nhập cho: <Text style={{ color: theme.ink, fontWeight: '700' }}>Mã {item.ntk}</Text>
@@ -489,12 +523,21 @@ export default function ItemCard({
               <TextInput
                 ref={qtyInputRef}
                 editable={!isSubmitting}
-                style={[styles.input(theme), isSubmitting && { opacity: 0.7 }]}
+                style={[
+                  styles.input(theme),
+                  focusedKey === 'main_qty' && { borderColor: theme.accent, borderWidth: 2 },
+                  isSubmitting && { opacity: 0.7 },
+                ]}
                 keyboardType="numeric"
                 placeholder="Số lượng sản xuất"
                 placeholderTextColor={theme.sub}
                 value={qty}
                 onChangeText={setQty}
+                onFocus={() => {
+                  setFocusedKey('main_qty');
+                  handleFocus(mainInputWrapRef);
+                }}
+                onBlur={() => setFocusedKey(null)}
               />
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
                 <View style={[styles.pickerWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
@@ -536,12 +579,21 @@ export default function ItemCard({
               <TextInput
                 ref={defectQtyInputRef}
                 editable={!isSubmitting}
-                style={[styles.input(theme), isSubmitting && { opacity: 0.7 }]}
+                style={[
+                  styles.input(theme),
+                  focusedKey === 'main_defect' && { borderColor: theme.accent, borderWidth: 2 },
+                  isSubmitting && { opacity: 0.7 },
+                ]}
                 keyboardType="numeric"
                 placeholder="Số lượng hàng lỗi"
                 placeholderTextColor={theme.sub}
                 value={defectQty}
                 onChangeText={setDefectQty}
+                onFocus={() => {
+                  setFocusedKey('main_defect');
+                  handleFocus(mainInputWrapRef);
+                }}
+                onBlur={() => setFocusedKey(null)}
               />
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                 {[['yellow', 'Thẻ vàng'], ['red', 'Thẻ đỏ'], ['tear', 'Rách bọc']].map(([key, label]) => {
@@ -559,7 +611,7 @@ export default function ItemCard({
                   );
                 })}
               </View>
-            </>
+            </View>
           )}
 
           {/* B. Mã hàng CÓ số hiệu → hiển thị tiến độ & nhập theo từng số hiệu */}
@@ -572,6 +624,12 @@ export default function ItemCard({
                   <Text style={{ color: theme.accent, fontWeight: '700' }}>PO {item.po}</Text>
                 </Text>
               </View>
+
+              <DateSelectorBar
+                selectedDate={selectedDate}
+                onSelectDate={setSelectedDate}
+                theme={theme}
+              />
 
               <View style={styles.refSectionHeaderRow}>
                 <Text style={styles.sectionLabel(theme)}>Tiến độ & nhập theo từng số hiệu</Text>
@@ -600,6 +658,7 @@ export default function ItemCard({
                 return (
                   <View
                     key={entry.ref_no}
+                    ref={el => { if (el) refCardMap.current[entry.ref_no] = { current: el }; }}
                     style={[
                       styles.refCard,
                       {
@@ -616,9 +675,12 @@ export default function ItemCard({
                     {/* Tag vừa cập nhật cho ref */}
                     {isRefLastUpdated && (
                       <View style={[styles.refLastUpdatedTag, { backgroundColor: theme.good + '18', borderColor: theme.good }]}>
-                        <Text style={[styles.refLastUpdatedText, { color: theme.good }]}>
-                          ⚡ Vừa cập nhật: +{lastUpdatedInfo.qty?.toLocaleString('vi-VN')} pcs {lastUpdatedInfo.time ? `(${lastUpdatedInfo.time})` : ''}
-                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Ionicons name="flash" size={11} color={theme.good} style={{ marginRight: 3 }} />
+                          <Text style={[styles.refLastUpdatedText, { color: theme.good }]}>
+                            Vừa cập nhật: +{lastUpdatedInfo.qty?.toLocaleString('vi-VN')} pcs {lastUpdatedInfo.time ? `(${lastUpdatedInfo.time})` : ''}
+                          </Text>
+                        </View>
                       </View>
                     )}
 
@@ -630,7 +692,8 @@ export default function ItemCard({
                         </View>
                         {isRefDone && (
                           <View style={[styles.refDoneBadge, { backgroundColor: theme.good + '22', borderColor: theme.good }]}>
-                            <Text style={{ color: theme.good, fontSize: 11, fontWeight: '700' }}>✓ Hoàn tất</Text>
+                            <Ionicons name="checkmark-circle" size={12} color={theme.good} style={{ marginRight: 3 }} />
+                            <Text style={{ color: theme.good, fontSize: 11, fontWeight: '700' }}>Hoàn tất</Text>
                           </View>
                         )}
                       </View>
@@ -675,7 +738,12 @@ export default function ItemCard({
                         editable={!isRefBusy}
                         style={[
                           styles.refInputMain,
-                          { borderColor: theme.line, backgroundColor: theme.card, color: theme.ink },
+                          {
+                            borderColor: focusedKey === `${key}:qty` ? theme.accent : theme.line,
+                            backgroundColor: theme.card,
+                            color: theme.ink,
+                          },
+                          focusedKey === `${key}:qty` && { borderWidth: 2 },
                           isRefBusy && { opacity: 0.7 },
                         ]}
                         keyboardType="numeric"
@@ -683,6 +751,11 @@ export default function ItemCard({
                         placeholderTextColor={theme.sub}
                         value={refQty[key] ?? ''}
                         onChangeText={v => setRefQtyFor(entry.ref_no, v)}
+                        onFocus={() => {
+                          setFocusedKey(`${key}:qty`);
+                          handleFocus(refCardMap.current[entry.ref_no]);
+                        }}
+                        onBlur={() => setFocusedKey(null)}
                       />
                       <View style={[styles.refPickerWrap, { borderColor: theme.line, backgroundColor: theme.card }]}>
                         <Picker
@@ -720,7 +793,12 @@ export default function ItemCard({
                         editable={!isRefBusy}
                         style={[
                           styles.refInputDefect,
-                          { borderColor: theme.line, backgroundColor: theme.card, color: theme.ink },
+                          {
+                            borderColor: focusedKey === `${key}:defect` ? theme.accent : theme.line,
+                            backgroundColor: theme.card,
+                            color: theme.ink,
+                          },
+                          focusedKey === `${key}:defect` && { borderWidth: 2 },
                           isRefBusy && { opacity: 0.7 },
                         ]}
                         keyboardType="numeric"
@@ -728,6 +806,11 @@ export default function ItemCard({
                         placeholderTextColor={theme.sub}
                         value={refDefectQty[key] ?? ''}
                         onChangeText={v => setRefDefectQtyFor(entry.ref_no, v)}
+                        onFocus={() => {
+                          setFocusedKey(`${key}:defect`);
+                          handleFocus(refCardMap.current[entry.ref_no]);
+                        }}
+                        onBlur={() => setFocusedKey(null)}
                       />
                       <View style={styles.refDefectChips}>
                         {[
@@ -778,9 +861,15 @@ export default function ItemCard({
             </View>
           )}
 
-          <TouchableOpacity onPress={toggleLog} style={{ marginTop: 12 }}>
-            <Text style={{ color: theme.accent, fontWeight: '600', fontSize: 12.5 }}>
-              📋 {logOpen ? 'Ẩn' : 'Xem'} nhật ký
+          <TouchableOpacity onPress={toggleLog} style={styles.logToggleBtn}>
+            <Ionicons
+              name={logOpen ? 'chevron-up-circle-outline' : 'document-text-outline'}
+              size={15}
+              color={theme.accent}
+              style={{ marginRight: 5 }}
+            />
+            <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 13 }}>
+              {logOpen ? 'Ẩn' : 'Xem'} nhật ký ({entries.length || item.entriesCount || 0})
             </Text>
           </TouchableOpacity>
 
@@ -792,8 +881,14 @@ export default function ItemCard({
                 entries.map(e => {
                   if (editingId === e.id) {
                     return (
-                      <View key={`edit-${e.id}`} style={{ marginTop: 8, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.line }}>
+                      <View key={`edit-${e.id}`} ref={editLogWrapRef} style={{ marginTop: 8, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.line }}>
                         <Text style={styles.sectionLabel(theme)}>Sửa nhật ký</Text>
+                        <DateSelectorBar
+                          selectedDate={editDate}
+                          onSelectDate={setEditDate}
+                          theme={theme}
+                          label="Ngày ghi nhận:"
+                        />
                         <TextInput
                           style={styles.input(theme)}
                           keyboardType="numeric"
@@ -801,6 +896,7 @@ export default function ItemCard({
                           placeholderTextColor={theme.sub}
                           value={editQty}
                           onChangeText={setEditQty}
+                          onFocus={() => handleFocus(editLogWrapRef)}
                         />
                         <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
                           <View style={[styles.pickerWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
@@ -818,6 +914,7 @@ export default function ItemCard({
                           placeholderTextColor={theme.sub}
                           value={editDefectQty}
                           onChangeText={setEditDefectQty}
+                          onFocus={() => handleFocus(editLogWrapRef)}
                         />
                         <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                           {[['yellow', 'Thẻ vàng'], ['red', 'Thẻ đỏ'], ['tear', 'Rách bọc']].map(([key, label]) => (
@@ -862,7 +959,18 @@ export default function ItemCard({
 }
 
 const styles = StyleSheet.create({
-  card: { borderWidth: 1.5, borderRadius: 6, padding: 14, marginBottom: 10 },
+  card: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 15,
+    marginBottom: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+  },
+  logToggleBtn: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   title: { fontSize: 17, fontWeight: '800', letterSpacing: 0.3 },
   poText: (theme) => ({ color: theme.sub, fontSize: 12.5, marginTop: 2, fontWeight: '500' }),
@@ -968,30 +1076,31 @@ const styles = StyleSheet.create({
     flex: 1,
     borderWidth: 1,
     borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    fontSize: 13,
-    minHeight: 38,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 15,
+    fontWeight: '700',
+    minHeight: 44,
   },
   refPickerWrap: {
     borderWidth: 1,
     borderRadius: 8,
     overflow: 'hidden',
     justifyContent: 'center',
-    height: 38,
+    height: 44,
   },
   refAddBtn: {
     paddingHorizontal: 14,
     borderRadius: 8,
-    height: 38,
+    height: 44,
     justifyContent: 'center',
     alignItems: 'center',
-    minWidth: 64,
+    minWidth: 68,
   },
   refAddBtnText: {
     color: '#fff',
     fontWeight: '700',
-    fontSize: 12.5,
+    fontSize: 13,
   },
   refDefectRow: {
     flexDirection: 'row',
@@ -999,13 +1108,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   refInputDefect: {
-    width: 72,
+    width: 84,
     borderWidth: 1,
     borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    fontSize: 12,
-    minHeight: 34,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    fontSize: 14,
+    fontWeight: '600',
+    minHeight: 40,
   },
   refDefectChips: {
     flexDirection: 'row',
@@ -1014,8 +1124,8 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   refDefectChip: {
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
   },
@@ -1041,7 +1151,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   sectionLabel: (theme) => ({ color: theme.sub, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', marginTop: 14, marginBottom: 6 }),
-  input: (theme) => ({ borderWidth: 1, borderColor: theme.line, backgroundColor: theme.bg, color: theme.ink, borderRadius: 10, padding: 12, fontSize: 15 }),
+  input: (theme) => ({ borderWidth: 1, borderColor: theme.line, backgroundColor: theme.bg, color: theme.ink, borderRadius: 10, padding: 12, fontSize: 16, fontWeight: '600' }),
   pickerWrap: { borderWidth: 1, borderRadius: 10, overflow: 'hidden', justifyContent: 'center' },
   addBtn: { paddingHorizontal: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
   defectChip: { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 999, borderWidth: 1 },

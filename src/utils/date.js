@@ -54,3 +54,46 @@ export function formatDisplayDate(dateStr) {
   const [, y, mo, d] = m;
   return `${d}-${mo}-${y}`;
 }
+
+/**
+ * Ngày hôm qua cục bộ dạng `YYYY-MM-DD`.
+ * @param {Date} [now]
+ * @returns {string}
+ */
+export function yesterdayLocal(now = new Date()) {
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  return todayLocal(d);
+}
+
+/**
+ * Kiểm tra xem chuỗi YYYY-MM-DD có phải ngày hôm nay không.
+ * @param {string} dateStr
+ * @param {Date} [now]
+ * @returns {boolean}
+ */
+export function isToday(dateStr, now = new Date()) {
+  return dateStr === todayLocal(now);
+}
+
+/**
+ * Kiểm tra xem chuỗi YYYY-MM-DD có phải ngày hôm qua không.
+ * @param {string} dateStr
+ * @param {Date} [now]
+ * @returns {boolean}
+ */
+export function isYesterday(dateStr, now = new Date()) {
+  return dateStr === yesterdayLocal(now);
+}
+
+/**
+ * Nhãn hiển thị thân thiện cho ngày: Hôm nay, Hôm qua, hoặc DD-MM-YYYY.
+ * @param {string} dateStr
+ * @param {Date} [now]
+ * @returns {string}
+ */
+export function dateLabel(dateStr, now = new Date()) {
+  if (!dateStr) return '';
+  if (isToday(dateStr, now)) return `Hôm nay (${formatDisplayDate(dateStr)})`;
+  if (isYesterday(dateStr, now)) return `Hôm qua (${formatDisplayDate(dateStr)})`;
+  return formatDisplayDate(dateStr);
+}
