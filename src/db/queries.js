@@ -1048,6 +1048,49 @@ export async function fetchHistoryDetail(groupBy, groupKey) {
 }
 
 /**
+ * FEAT-27 — Lấy danh sách chi tiết từng bản ghi nhật ký sản xuất của một nhóm lịch sử.
+ * Dùng cho hiển thị, sửa và xoá từng lượt sản xuất trong tab Lịch sử.
+ */
+export async function fetchHistoryEntries(groupBy, groupKey) {
+  const db = await getDb();
+  const expr = HISTORY_GROUP_EXPR[groupBy]?.('pe');
+  if (!expr) return [];
+  const rows = await db.getAllAsync(
+    `SELECT pe.id,
+            pe.date,
+            pe.qty,
+            pe.line,
+            pe.defect_qty,
+            pe.order_line_id,
+            ol.item_code AS ntk,
+            p.code AS po,
+            er.ref_no,
+            GROUP_CONCAT(pd.type) AS defect_types
+     FROM production_entries pe
+     JOIN order_lines ol ON ol.id = pe.order_line_id
+     JOIN pos p ON p.id = ol.po_id
+     LEFT JOIN production_entry_refs er ON er.entry_id = pe.id
+     LEFT JOIN production_defects pd ON pd.entry_id = pe.id
+     WHERE ${expr} = ?
+     GROUP BY pe.id
+     ORDER BY pe.date DESC, pe.id DESC`,
+    [groupKey]
+  );
+  return rows.map(r => ({
+    id: r.id,
+    date: r.date,
+    qty: num(r.qty),
+    line: r.line,
+    defect_qty: num(r.defect_qty),
+    defect_types: r.defect_types ? r.defect_types.split(',') : [],
+    orderLineId: r.order_line_id,
+    ntk: r.ntk,
+    po: r.po,
+    refNo: r.ref_no || null,
+  }));
+}
+
+/**
  * Danh sách đơn đã lưu trữ.
  *
  * Giữ **tên field cũ** (snake_case) vì `ArchiveCard` đọc thẳng các tên này — đổi tên ở đây sẽ

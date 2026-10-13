@@ -1,6 +1,6 @@
 // src/components/ItemEditSheet.js
 // FEAT-10 — Form thêm / sửa / xoá mã hàng và số lượng kế hoạch.
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -30,6 +30,32 @@ export default function ItemEditSheet({ item, pos, defaultPo, onClose, onSubmit,
   const [customPo, setCustomPo] = useState(item?.po || '');
   const [target, setTarget] = useState(item ? String(item.target ?? 0) : '');
   const [busy, setBusy] = useState(false);
+
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const scrollViewRef = useRef(null);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, e => {
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  const scrollToInput = yOffset => {
+    setTimeout(() => {
+      scrollViewRef.current?.scrollTo({ y: yOffset, animated: true });
+    }, 120);
+  };
 
   async function handleSave() {
     if (busy) return;
@@ -91,11 +117,21 @@ export default function ItemEditSheet({ item, pos, defaultPo, onClose, onSubmit,
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={[styles.backdrop, { backgroundColor: '#0006' }]}>
             <TouchableWithoutFeedback onPress={e => e.stopPropagation()}>
-              <View style={[styles.sheet, { backgroundColor: theme.card, borderColor: theme.line }]}>
+              <View
+                style={[
+                  styles.sheet,
+                  {
+                    backgroundColor: theme.card,
+                    borderColor: theme.line,
+                  },
+                ]}
+              >
                 <ScrollView
+                  ref={scrollViewRef}
                   keyboardShouldPersistTaps="handled"
                   showsVerticalScrollIndicator={false}
                   bounces={false}
+                  contentContainerStyle={{ paddingBottom: keyboardHeight > 0 ? 80 : 30 }}
                 >
                   <Text style={[styles.title, { color: theme.ink }]}>
                     {isEdit ? `Sửa mã ${item.ntk}` : 'Thêm mã hàng'}
@@ -110,6 +146,7 @@ export default function ItemEditSheet({ item, pos, defaultPo, onClose, onSubmit,
                     autoCorrect={false}
                     value={ntk}
                     onChangeText={setNtk}
+                    onFocus={() => scrollToInput(0)}
                   />
 
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, marginBottom: 6 }}>
@@ -132,6 +169,7 @@ export default function ItemEditSheet({ item, pos, defaultPo, onClose, onSubmit,
                       autoCorrect={false}
                       value={customPo}
                       onChangeText={setCustomPo}
+                      onFocus={() => scrollToInput(110)}
                     />
                   ) : (
                     <View style={[styles.pickerWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
@@ -150,6 +188,7 @@ export default function ItemEditSheet({ item, pos, defaultPo, onClose, onSubmit,
                     placeholderTextColor={theme.sub}
                     value={target}
                     onChangeText={setTarget}
+                    onFocus={() => scrollToInput(220)}
                   />
 
                   <View style={styles.btnRow}>

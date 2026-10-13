@@ -1,6 +1,6 @@
 // src/components/PalletEditSheet.js
 // Form thêm / sửa / xoá kiện trong một container.
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -12,6 +12,8 @@ import {
   KeyboardAvoidingView,
   ScrollView,
   Platform,
+  TouchableWithoutFeedback,
+  Keyboard,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { parseQty } from '@/utils/validateQty';
@@ -49,6 +51,33 @@ export default function PalletEditSheet({
   const [no, setNo] = useState(pallet ? String(palletNo) : String(defaultNo || ''));
   const [rows, setRows] = useState(() => initialRows(pallet, itemOptions));
   const [busy, setBusy] = useState(false);
+
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const scrollViewRef = useRef(null);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, e => {
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  const scrollRowIntoView = index => {
+    setTimeout(() => {
+      const yOffset = Math.max(0, 140 + index * 56);
+      scrollViewRef.current?.scrollTo({ y: yOffset, animated: true });
+    }, 120);
+  };
 
   // Tổng số lượng pcs hiện tại của cả kiện (cộng dồn theo thời gian thực)
   const totalPalletQty = rows.reduce((sum, r) => sum + (parseQty(r.qty) || 0), 0);
@@ -165,134 +194,159 @@ export default function PalletEditSheet({
     <Modal visible animationType="slide" transparent onRequestClose={onClose}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.backdrop}
+        style={styles.keyboardAvoid}
       >
-        <View style={[styles.sheet, { backgroundColor: theme.card, borderColor: theme.line }]}>
-          <ScrollView bounces={false} keyboardShouldPersistTaps="handled">
-            <Text style={[styles.title, { color: theme.ink }]}>
-              {isEdit ? `📦 Sửa kiện ${palletNo}` : '📦 Thêm kiện mới'}
-            </Text>
-
-            <View style={[styles.infoBadge, { backgroundColor: theme.bg, borderColor: theme.line }]}>
-              <Text style={{ color: theme.sub, fontSize: 12.5 }}>
-                {containerLabel}
-              </Text>
-            </View>
-
-            <Text style={styles.label(theme)}>Số hiệu kiện *</Text>
-            <TextInput
-              style={[
-                styles.input,
-                { borderColor: theme.line, backgroundColor: theme.bg, color: theme.ink },
-              ]}
-              keyboardType="numeric"
-              placeholder="VD: 11"
-              placeholderTextColor={theme.sub}
-              value={no}
-              onChangeText={setNo}
-            />
-            <Text style={[styles.hint, { color: theme.sub }]}>
-              {isEdit
-                ? 'Có thể đổi sang số hiệu kiện khác chưa dùng trong container này.'
-                : 'Số hiệu kiện được tạo tự động tiếp nối hoặc nhập tay tuỳ ý.'}
-            </Text>
-
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.label(theme)}>Hàng trong kiện *</Text>
-              <View style={[styles.badgeQty, { backgroundColor: theme.bg, borderColor: theme.line }]}>
-                <Text style={{ color: theme.sub, fontSize: 11.5 }}>
-                  Tổng:{' '}
-                  <Text style={{ color: theme.accent, fontWeight: '700' }}>
-                    {totalPalletQty.toLocaleString('vi-VN')} pcs
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View style={[styles.backdrop, { backgroundColor: '#0006' }]}>
+            <TouchableWithoutFeedback onPress={e => e.stopPropagation()}>
+              <View
+                style={[
+                  styles.sheet,
+                  {
+                    backgroundColor: theme.card,
+                    borderColor: theme.line,
+                  },
+                ]}
+              >
+                <ScrollView
+                  ref={scrollViewRef}
+                  bounces={false}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={{ paddingBottom: keyboardHeight > 0 ? 80 : 30 }}
+                >
+                  <Text style={[styles.title, { color: theme.ink }]}>
+                    {isEdit ? `📦 Sửa kiện ${palletNo}` : '📦 Thêm kiện mới'}
                   </Text>
-                  {rows.length > 1 ? ` (${rows.length} loại hàng)` : ''}
-                </Text>
-              </View>
-            </View>
 
-            {rows.map((r, i) => (
-              <View key={i} style={styles.row}>
-                <View style={[styles.pickerWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
-                  <Picker
-                    selectedValue={r.ntk}
-                    onValueChange={v => handleSelectNtk(i, v)}
-                    style={{ color: theme.ink }}
-                  >
-                    <Picker.Item label="— Chọn mã hàng —" value="" />
-                    {itemOptions.map(opt => {
-                      const val = typeof opt === 'object' ? opt.ntk : opt;
-                      const label = typeof opt === 'object'
-                        ? `${opt.ntk}${opt.target ? ` · KH: ${opt.target.toLocaleString('vi-VN')} pcs` : ''}`
-                        : opt;
-                      return <Picker.Item key={val} label={label} value={val} />;
-                    })}
-                  </Picker>
-                </View>
+                  <View style={[styles.infoBadge, { backgroundColor: theme.bg, borderColor: theme.line }]}>
+                    <Text style={{ color: theme.sub, fontSize: 12.5 }}>
+                      {containerLabel}
+                    </Text>
+                  </View>
 
-                <TextInput
-                  style={[
-                    styles.qtyInput,
-                    { borderColor: theme.line, backgroundColor: theme.bg, color: theme.ink },
-                  ]}
-                  keyboardType="numeric"
-                  placeholder="pcs"
-                  placeholderTextColor={theme.sub}
-                  value={r.qty}
-                  onChangeText={v => setRow(i, { qty: v })}
-                />
+                  <Text style={styles.label(theme)}>Số hiệu kiện *</Text>
+                  <TextInput
+                    style={[
+                      styles.input,
+                      { borderColor: theme.line, backgroundColor: theme.bg, color: theme.ink },
+                    ]}
+                    keyboardType="numeric"
+                    placeholder="VD: 11"
+                    placeholderTextColor={theme.sub}
+                    value={no}
+                    onChangeText={setNo}
+                    onFocus={() => {
+                      setTimeout(() => scrollViewRef.current?.scrollTo({ y: 0, animated: true }), 100);
+                    }}
+                  />
+                  <Text style={[styles.hint, { color: theme.sub }]}>
+                    {isEdit
+                      ? 'Có thể đổi sang số hiệu kiện khác chưa dùng trong container này.'
+                      : 'Số hiệu kiện được tạo tự động tiếp nối hoặc nhập tay tuỳ ý.'}
+                  </Text>
 
-                {rows.length > 1 && (
-                  <TouchableOpacity onPress={() => removeRow(i)} style={styles.rowBtn}>
-                    <Text style={{ color: theme.bad, fontWeight: '700', fontSize: 16 }}>✕</Text>
+                  <View style={styles.sectionHeaderRow}>
+                    <Text style={styles.label(theme)}>Hàng trong kiện *</Text>
+                    <View style={[styles.badgeQty, { backgroundColor: theme.bg, borderColor: theme.line }]}>
+                      <Text style={{ color: theme.sub, fontSize: 11.5 }}>
+                        Tổng:{' '}
+                        <Text style={{ color: theme.accent, fontWeight: '700' }}>
+                          {totalPalletQty.toLocaleString('vi-VN')} pcs
+                        </Text>
+                        {rows.length > 1 ? ` (${rows.length} loại hàng)` : ''}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {rows.map((r, i) => (
+                    <View key={i} style={styles.row}>
+                      <View style={[styles.pickerWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
+                        <Picker
+                          selectedValue={r.ntk}
+                          onValueChange={v => handleSelectNtk(i, v)}
+                          style={{ color: theme.ink }}
+                        >
+                          <Picker.Item label="— Chọn mã hàng —" value="" />
+                          {itemOptions.map(opt => {
+                            const val = typeof opt === 'object' ? opt.ntk : opt;
+                            const label = typeof opt === 'object'
+                              ? `${opt.ntk}${opt.target ? ` · KH: ${opt.target.toLocaleString('vi-VN')} pcs` : ''}`
+                              : opt;
+                            return <Picker.Item key={val} label={label} value={val} />;
+                          })}
+                        </Picker>
+                      </View>
+
+                      <TextInput
+                        style={[
+                          styles.qtyInput,
+                          { borderColor: theme.line, backgroundColor: theme.bg, color: theme.ink },
+                        ]}
+                        keyboardType="numeric"
+                        placeholder="pcs"
+                        placeholderTextColor={theme.sub}
+                        value={r.qty}
+                        onChangeText={v => setRow(i, { qty: v })}
+                        onFocus={() => scrollRowIntoView(i)}
+                      />
+
+                      {rows.length > 1 && (
+                        <TouchableOpacity onPress={() => removeRow(i)} style={styles.rowBtn}>
+                          <Text style={{ color: theme.bad, fontWeight: '700', fontSize: 16 }}>✕</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  ))}
+
+                  <TouchableOpacity style={[styles.addRow, { borderColor: theme.line }]} onPress={addRow}>
+                    <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 13 }}>＋ Thêm loại hàng (Kiện mix)</Text>
                   </TouchableOpacity>
-                )}
+
+                  {itemOptions.length === 0 && (
+                    <Text style={[styles.hint, { color: theme.bad, marginTop: 10 }]}>
+                      Đơn hàng hiện tại chưa có mã hàng nào phù hợp với container này.
+                    </Text>
+                  )}
+
+                  <View style={styles.btnRow}>
+                    <TouchableOpacity
+                      style={[styles.btn, { backgroundColor: theme.sub }]}
+                      onPress={onClose}
+                      disabled={busy}
+                    >
+                      <Text style={styles.btnTxt}>Huỷ</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.btn, { backgroundColor: theme.accent, opacity: busy ? 0.6 : 1 }]}
+                      onPress={handleSave}
+                      disabled={busy}
+                    >
+                      <Text style={styles.btnTxt}>{isEdit ? 'Lưu thay đổi' : 'Thêm kiện'}</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {isEdit && (
+                    <TouchableOpacity
+                      style={[styles.btn, { backgroundColor: theme.bad, marginTop: 10, opacity: busy ? 0.6 : 1 }]}
+                      onPress={handleDelete}
+                      disabled={busy}
+                    >
+                      <Text style={styles.btnTxt}>🗑 Xoá kiện</Text>
+                    </TouchableOpacity>
+                  )}
+                </ScrollView>
               </View>
-            ))}
-
-            <TouchableOpacity style={[styles.addRow, { borderColor: theme.line }]} onPress={addRow}>
-              <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 13 }}>＋ Thêm loại hàng (Kiện mix)</Text>
-            </TouchableOpacity>
-
-            {itemOptions.length === 0 && (
-              <Text style={[styles.hint, { color: theme.bad, marginTop: 10 }]}>
-                Đơn hàng hiện tại chưa có mã hàng nào phù hợp với container này.
-              </Text>
-            )}
-
-            <View style={styles.btnRow}>
-              <TouchableOpacity
-                style={[styles.btn, { backgroundColor: theme.sub }]}
-                onPress={onClose}
-                disabled={busy}
-              >
-                <Text style={styles.btnTxt}>Huỷ</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.btn, { backgroundColor: theme.accent, opacity: busy ? 0.6 : 1 }]}
-                onPress={handleSave}
-                disabled={busy}
-              >
-                <Text style={styles.btnTxt}>{isEdit ? 'Lưu thay đổi' : 'Thêm kiện'}</Text>
-              </TouchableOpacity>
-            </View>
-
-            {isEdit && (
-              <TouchableOpacity
-                style={[styles.btn, { backgroundColor: theme.bad, marginTop: 10, opacity: busy ? 0.6 : 1 }]}
-                onPress={handleDelete}
-                disabled={busy}
-              >
-                <Text style={styles.btnTxt}>🗑 Xoá kiện</Text>
-              </TouchableOpacity>
-            )}
-          </ScrollView>
-        </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
       </KeyboardAvoidingView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  keyboardAvoid: { flex: 1 },
   backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: '#0006' },
   sheet: {
     borderTopLeftRadius: 16,
