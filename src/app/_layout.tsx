@@ -1,8 +1,9 @@
 // src/app/_layout.tsx
 import React, { useEffect } from 'react';
-import { View, Text, ActivityIndicator, useColorScheme } from 'react-native';
+import { View, Text, ActivityIndicator, useColorScheme, Platform, AppState } from 'react-native';
 import { Stack } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { NavigationBar } from 'expo-navigation-bar';
 import { useAppStore } from '@/store/useAppStore';
 import { getTheme } from '@/theme';
 
@@ -14,9 +15,22 @@ export default function RootLayout() {
 
   useEffect(() => { init(); }, [init]);
 
+  useEffect(() => {
+    if (Platform.OS === 'android') {
+      NavigationBar.setHidden(true);
+      const sub = AppState.addEventListener('change', state => {
+        if (state === 'active') {
+          NavigationBar.setHidden(true);
+        }
+      });
+      return () => sub.remove();
+    }
+  }, []);
+
   if (!ready) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.bg }}>
+        <NavigationBar hidden={true} />
         <ActivityIndicator size="large" color={theme.accent} />
         <Text style={{ color: theme.sub, marginTop: 10 }}>Đang tải dữ liệu...</Text>
       </View>
@@ -25,6 +39,7 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
+      <NavigationBar hidden={true} />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
       </Stack>
