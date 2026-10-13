@@ -41,8 +41,8 @@ export default function ArchiveCard({ archive, theme, expanded, onToggle, onDele
             </Text>
           )}
           <Text style={{ color: theme.sub, fontSize: 11.5, marginTop: 3 }}>
-            {archive.total_produced.toLocaleString()}/{archive.total_target.toLocaleString()} pcs ·{' '}
-            {archive.pallets_done}/{archive.pallets_total} kiện · Lỗi {archive.total_defect.toLocaleString()}
+            {(archive.total_produced ?? 0).toLocaleString('vi-VN')}/{(archive.total_target ?? 0).toLocaleString('vi-VN')} pcs ·{' '}
+            {archive.pallets_done ?? 0}/{archive.pallets_total ?? 0} kiện · Lỗi {(archive.total_defect ?? 0).toLocaleString('vi-VN')}
           </Text>
         </View>
         <View style={styles.actions}>
@@ -65,11 +65,17 @@ export default function ArchiveCard({ archive, theme, expanded, onToggle, onDele
       </TouchableOpacity>
       {isOpen && (
         <View style={{ marginTop: 10 }}>
-          {items.map(it => (
-            <View key={it.ntk} style={[styles.row, { borderTopColor: theme.line }]}>
-              <Text style={{ color: theme.sub, fontSize: 12.5 }}>Mã {it.ntk}</Text>
+          {items.map((it, idx) => (
+            <View
+              key={it.order_line_id ?? `${it.po || ''}_${it.ntk || idx}`}
+              style={[styles.row, { borderTopColor: theme.line }]}
+            >
               <Text style={{ color: theme.sub, fontSize: 12.5 }}>
-                {it.produced}/{it.target} pcs{it.defect ? ` · Lỗi ${it.defect}` : ''}
+                Mã {it.ntk}{it.po ? ` · PO ${it.po}` : ''}
+              </Text>
+              <Text style={{ color: theme.sub, fontSize: 12.5 }}>
+                {(it.produced ?? 0).toLocaleString('vi-VN')}/{(it.target ?? 0).toLocaleString('vi-VN')} pcs
+                {it.defect > 0 ? ` · Lỗi ${it.defect.toLocaleString('vi-VN')}` : ''}
               </Text>
             </View>
           ))}

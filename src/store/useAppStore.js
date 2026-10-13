@@ -280,7 +280,7 @@ export const useAppStore = create((set, get) => ({
     set({ importStatus: 'loading', importResult: null });
     const { batchId } = get();
     try {
-      const parsed = JSON.parse(jsonData);
+      const parsed = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
 
       let result;
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
