@@ -21,19 +21,28 @@ import { palletErrorMessage } from '@/utils/palletError';
 
 export { palletErrorMessage };
 
+function getOptValue(opt) {
+  if (!opt) return '';
+  if (typeof opt === 'string') return opt;
+  if (opt.order_line_id) return String(opt.order_line_id);
+  return opt.po ? `${opt.po}_${opt.ntk}` : opt.ntk;
+}
+
 function initialRows(pallet, itemOptions) {
   if (pallet && Array.isArray(pallet.items) && pallet.items.length > 0) {
     return pallet.items.map(it => ({
       ntk: it.ntk,
       qty: String(it.qty),
       order_line_id: it.order_line_id ?? null,
+      po: it.po ?? null,
       done: it.done ?? false,
     }));
   }
   const defaultOption = itemOptions?.[0];
   const defaultNtk = typeof defaultOption === 'object' ? defaultOption?.ntk : defaultOption;
   const defaultLineId = typeof defaultOption === 'object' ? defaultOption?.order_line_id : null;
-  return [{ ntk: defaultNtk || '', qty: '', order_line_id: defaultLineId, done: false }];
+  const defaultPo = typeof defaultOption === 'object' ? defaultOption?.po : null;
+  return [{ ntk: defaultNtk || '', qty: '', order_line_id: defaultLineId, po: defaultPo, done: false }];
 }
 
 export default function PalletEditSheet({
@@ -88,12 +97,14 @@ export default function PalletEditSheet({
 
   function handleSelectNtk(index, selectedValue) {
     const matched = itemOptions.find(opt => {
-      const val = typeof opt === 'object' ? opt.ntk : opt;
-      return val === selectedValue;
+      const val = getOptValue(opt);
+      const ntkVal = typeof opt === 'object' ? opt.ntk : opt;
+      return String(val) === String(selectedValue) || String(ntkVal) === String(selectedValue);
     });
     setRow(index, {
-      ntk: selectedValue,
+      ntk: typeof matched === 'object' ? matched.ntk : selectedValue,
       order_line_id: typeof matched === 'object' ? matched.order_line_id : null,
+      po: typeof matched === 'object' ? matched.po : null,
     });
   }
 
@@ -101,7 +112,8 @@ export default function PalletEditSheet({
     const defaultOption = itemOptions?.[0];
     const defaultNtk = typeof defaultOption === 'object' ? defaultOption?.ntk : defaultOption;
     const defaultLineId = typeof defaultOption === 'object' ? defaultOption?.order_line_id : null;
-    setRows(prev => [...prev, { ntk: defaultNtk || '', qty: '', order_line_id: defaultLineId, done: false }]);
+    const defaultPo = typeof defaultOption === 'object' ? defaultOption?.po : null;
+    setRows(prev => [...prev, { ntk: defaultNtk || '', qty: '', order_line_id: defaultLineId, po: defaultPo, done: false }]);
   }
 
   function removeRow(index) {
@@ -263,15 +275,17 @@ export default function PalletEditSheet({
                     <View key={i} style={styles.row}>
                       <View style={[styles.pickerWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
                         <Picker
-                          selectedValue={r.ntk}
+                          selectedValue={r.order_line_id ? String(r.order_line_id) : r.ntk}
                           onValueChange={v => handleSelectNtk(i, v)}
                           style={{ color: theme.ink }}
                         >
                           <Picker.Item label="— Chọn mã hàng —" value="" />
                           {itemOptions.map(opt => {
-                            const val = typeof opt === 'object' ? opt.ntk : opt;
-                            const label = typeof opt === 'object'
-                              ? `${opt.ntk}${opt.target ? ` · KH: ${opt.target.toLocaleString('vi-VN')} pcs` : ''}`
+                            const isObj = typeof opt === 'object';
+                            const val = getOptValue(opt);
+                            const poPrefix = isObj && opt.po ? `[PO ${opt.po}] ` : '';
+                            const label = isObj
+                              ? `${poPrefix}Mã ${opt.ntk}${opt.target ? ` · KH: ${opt.target.toLocaleString('vi-VN')} pcs` : ''}`
                               : opt;
                             return <Picker.Item key={val} label={label} value={val} />;
                           })}

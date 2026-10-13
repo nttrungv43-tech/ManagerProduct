@@ -35,15 +35,29 @@ export default function ContainersScreen() {
   // FEAT-21: `containerData` là cây từ bảng thật (`containers` → `pallets` → `pallet_lines`),
   // không phải blob JSON, và luôn là mảng ⇒ không còn fallback seed.
   const containers = containerData;
-  // FEAT-23 §sort: danh sách PO **tăng dần** theo số (`'2919'` < `'2920'` < `'2929'`). `p.code`
-  // là số dạng chuỗi nên `localeCompare` sẽ sai (`'2929'` > `'2919'` nhưng `'60' > '500'`). So sánh
-  // số trước, chỉ tới `localeCompare` khi một trong hai không phải số — tránh sai với PO lẻ
-  // không mang số.
-  const cpos = Array.from(new Set(containers.map(c => c.po).filter(Boolean)))
-    .sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
-  const filtered = containers.filter(
-    c => activeContainerFilter === 'all' || c.po === activeContainerFilter
-  );
+  // FEAT-23 §sort: danh sách PO **tăng dần** theo số (`'2919'` < `'2920'` < `'2929'`).
+  // Thu thập mọi PO có trong container và kiện để hỗ trợ container chứa nhiều PO.
+  const cpos = useMemo(() => {
+    const set = new Set();
+    (containers || []).forEach(c => {
+      if (c.po) set.add(c.po);
+      (c.pallets || []).forEach(p => {
+        (p.items || []).forEach(it => {
+          if (it.po) set.add(it.po);
+        });
+      });
+    });
+    return Array.from(set).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+  }, [containers]);
+
+  const filtered = useMemo(() => {
+    return containers.filter(c => {
+      if (activeContainerFilter === 'all') return true;
+      if (c.po === activeContainerFilter) return true;
+      return (c.pallets || []).some(p => (p.items || []).some(it => it.po === activeContainerFilter));
+    });
+  }, [containers, activeContainerFilter]);
+
   // Một kiện "đóng xong" khi **mọi** dòng hàng của nó đã tick. Với kiện một mã (thực tế
   // `Dmac.json` có 220/220 kiện một mã) đây đúng là tick của cả kiện — trước đây cần khoá
   // riêng cho hai trường hợp, nay một quy tắc cho cả hai.
@@ -64,13 +78,13 @@ export default function ContainersScreen() {
     setExpandedIds(next);
   }
 
-  function openAddPallet(c) {
+  function openAddPallet(c, containerPos) {
     const nextNo = (c.pallets || []).reduce((m, p) => Math.max(m, p.pallet_no ?? p.no), 0) + 1;
-    setDraft({ containerId: c.id, label: c.container_no, po: c.po, pallet: null, nextNo });
+    setDraft({ containerId: c.id, label: c.container_no, po: c.po, pos: containerPos, pallet: null, nextNo });
   }
 
-  function openEditPallet(c, pallet) {
-    setDraft({ containerId: c.id, label: c.container_no, po: c.po, pallet, nextNo: null });
+  function openEditPallet(c, pallet, containerPos) {
+    setDraft({ containerId: c.id, label: c.container_no, po: c.po, pos: containerPos, pallet, nextNo: null });
   }
 
   function confirmDeletePallet(c, pallet) {
@@ -112,25 +126,33 @@ export default function ContainersScreen() {
     return Array.from(set).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
   }, [cpos, poRows]);
 
-  // Danh sách mã hàng khả dụng cho kiện đang thêm / sửa (lọc theo PO của container)
+  // Danh sách mã hàng khả dụng cho kiện đang thêm / sửa (lọc theo các PO của container)
   const draftItemOptions = useMemo(() => {
     if (!draft) return [];
-    const poItems = draft.po ? items.filter(it => it.po === draft.po) : items;
+    const targetPos = draft.pos && draft.pos.length > 0 ? new Set(draft.pos) : (draft.po ? new Set([draft.po]) : null);
+    const poItems = targetPos ? items.filter(it => targetPos.has(it.po)) : items;
     const baseItems = poItems.length > 0 ? poItems : items;
     const map = new Map();
     baseItems.forEach(it => {
-      if (it.ntk && !map.has(it.ntk)) {
-        map.set(it.ntk, { ntk: it.ntk, target: it.target, order_line_id: it.order_line_id });
+      const key = it.order_line_id ? String(it.order_line_id) : `${it.po || ''}_${it.ntk}`;
+      if (it.ntk && !map.has(key)) {
+        map.set(key, { ntk: it.ntk, target: it.target, order_line_id: it.order_line_id, po: it.po });
       }
     });
     if (draft.pallet?.items) {
       draft.pallet.items.forEach(it => {
-        if (it.ntk && !map.has(it.ntk)) {
-          map.set(it.ntk, { ntk: it.ntk, target: 0, order_line_id: it.order_line_id });
+        const key = it.order_line_id ? String(it.order_line_id) : `${it.po || ''}_${it.ntk}`;
+        if (it.ntk && !map.has(key)) {
+          map.set(key, { ntk: it.ntk, target: 0, order_line_id: it.order_line_id, po: it.po });
         }
       });
     }
-    return Array.from(map.values()).sort((a, b) => a.ntk.localeCompare(b.ntk));
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.po && b.po && a.po !== b.po) {
+        return Number(a.po) - Number(b.po) || a.po.localeCompare(b.po);
+      }
+      return a.ntk.localeCompare(b.ntk);
+    });
   }, [items, draft]);
 
 
@@ -175,25 +197,29 @@ export default function ContainersScreen() {
     });
 
     (containers || []).forEach(c => {
-      const poCode = c?.po;
-      if (!poCode) return;
-      const codeStr = String(poCode);
-      if (!map.has(codeStr)) {
-        map.set(codeStr, {
-          code: codeStr,
-          target: 0,
-          produced: 0,
-          defect: 0,
-          palletsTotal: 0,
-          palletsDone: 0,
-        });
-      }
-      const entry = map.get(codeStr);
       (c?.pallets || []).forEach(p => {
-        entry.palletsTotal += 1;
-        if (palletDone(p)) {
-          entry.palletsDone += 1;
+        const palletPos = new Set((p?.items || []).map(it => it.po).filter(Boolean));
+        if (palletPos.size === 0 && c?.po) {
+          palletPos.add(c.po);
         }
+        palletPos.forEach(poCode => {
+          const codeStr = String(poCode);
+          if (!map.has(codeStr)) {
+            map.set(codeStr, {
+              code: codeStr,
+              target: 0,
+              produced: 0,
+              defect: 0,
+              palletsTotal: 0,
+              palletsDone: 0,
+            });
+          }
+          const entry = map.get(codeStr);
+          entry.palletsTotal += 1;
+          if (palletDone(p)) {
+            entry.palletsDone += 1;
+          }
+        });
       });
     });
 
@@ -288,6 +314,12 @@ export default function ContainersScreen() {
           const sortedPallets = (c.pallets ?? []).sort(
             (a, b) => (a.pallet_no ?? a.no) - (b.pallet_no ?? b.no)
           );
+          const containerPos = Array.from(new Set([
+            c.po,
+            ...(c.pallets ?? []).flatMap(p => (p.items ?? []).map(it => it.po)),
+          ].filter(Boolean))).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+          const isMultiPo = containerPos.length > 1;
+
           let cDone = 0, totalQty = 0, doneQty = 0;
           sortedPallets.forEach(p => {
             const pd = palletDone(p);
@@ -311,9 +343,22 @@ export default function ContainersScreen() {
                     <Ionicons name="cube-outline" size={17} color={theme.accent} style={{ marginRight: 6 }} />
                     <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 16 }}>{c.container_no}</Text>
                   </View>
-                  <Text style={{ color: theme.sub, fontSize: 12, marginTop: 3 }}>
-                    PO {c.po}{c.seal_no ? ` · Seal: ${c.seal_no}` : ''}
-                  </Text>
+                  {isMultiPo ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 3, gap: 6 }}>
+                      <Text style={{ color: theme.sub, fontSize: 12 }}>
+                        PO: {containerPos.join(' · ')}{c.seal_no ? ` · Seal: ${c.seal_no}` : ''}
+                      </Text>
+                      <View style={[styles.multiPoBadge, { backgroundColor: theme.accent + '18', borderColor: theme.accent + '40' }]}>
+                        <Text style={[styles.multiPoBadgeText, { color: theme.accent }]}>
+                          {containerPos.length} PO
+                        </Text>
+                      </View>
+                    </View>
+                  ) : (
+                    <Text style={{ color: theme.sub, fontSize: 12, marginTop: 3 }}>
+                      PO {c.po}{c.seal_no ? ` · Seal: ${c.seal_no}` : ''}
+                    </Text>
+                  )}
                 </TouchableOpacity>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <TouchableOpacity
@@ -344,7 +389,7 @@ export default function ContainersScreen() {
               )}
               {isOpen && (
                 <View style={{ marginTop: 10 }}>
-                  <TouchableOpacity style={styles.addPalletBtn} onPress={() => openAddPallet(c)}>
+                  <TouchableOpacity style={styles.addPalletBtn} onPress={() => openAddPallet(c, containerPos)}>
                     <Ionicons name="add" size={15} color={theme.accent} style={{ marginRight: 4 }} />
                     <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>Thêm kiện</Text>
                   </TouchableOpacity>
@@ -352,8 +397,9 @@ export default function ContainersScreen() {
                     <PalletRow
                       key={p.id}
                       pallet={p}
+                      isMultiPo={isMultiPo}
                       onToggleLine={togglePalletLine}
-                      onEditPallet={pallet => openEditPallet(c, pallet)}
+                      onEditPallet={pallet => openEditPallet(c, pallet, containerPos)}
                       onDeletePallet={pallet => confirmDeletePallet(c, pallet)}
                       theme={theme}
                     />
@@ -506,4 +552,14 @@ const styles = StyleSheet.create({
   archiveHead: { fontSize: 14, fontWeight: '800', marginBottom: 8 },
   archiveHeadRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   archiveTool: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, flexDirection: 'row', alignItems: 'center' },
+  multiPoBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  multiPoBadgeText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+  },
 });
