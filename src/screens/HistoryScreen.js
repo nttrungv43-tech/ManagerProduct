@@ -18,6 +18,7 @@ import FilterChips from '@/components/FilterChips';
 import { formatDisplayDate, todayLocal } from '@/utils/date';
 import BackupRestoreSection from '@/components/BackupRestoreSection';
 import HistoryEntrySheet from '@/components/HistoryEntrySheet';
+import DeleteHistoryModal from '@/components/DeleteHistoryModal';
 
 export default function HistoryScreen() {
   const theme = getTheme(useColorScheme());
@@ -31,6 +32,7 @@ export default function HistoryScreen() {
     addEntry,
     updateEntry,
     removeEntry,
+    removeHistoryGroup,
   } = useAppStore();
 
   const [groups, setGroups] = useState([]);
@@ -42,6 +44,9 @@ export default function HistoryScreen() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState(null);
   const [sheetInitialDate, setSheetInitialDate] = useState(null);
+
+  // Quản lý Modal xoá lịch sử theo ngày / tháng / năm
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
 
   // Reset state and reload when filter or dataVersion changes
   useEffect(() => {
@@ -108,6 +113,28 @@ export default function HistoryScreen() {
     );
   }
 
+  function handleDeleteGroup(g) {
+    const label = labelFor(g.groupKey);
+    const typeText = historyGroup === 'day' ? 'ngày' : historyGroup === 'month' ? 'tháng' : 'năm';
+    Alert.alert(
+      `Xác nhận xoá ${typeText}`,
+      `Bạn có chắc chắn muốn xoá toàn bộ lịch sử sản xuất của ${label}?\n\n• Tổng sản lượng: ${g.total.toLocaleString('vi-VN')} pcs\n• Số lỗi: ${g.defectTotal.toLocaleString('vi-VN')} pcs\n\nSố lượng đã sản xuất trên các mã hàng sẽ được hoàn lại tương ứng. Thao tác không thể hoàn tác.`,
+      [
+        { text: 'Huỷ', style: 'cancel' },
+        {
+          text: 'Xoá toàn bộ',
+          style: 'destructive',
+          onPress: async () => {
+            const res = await removeHistoryGroup(historyGroup, g.groupKey);
+            if (res && res.ok === false) {
+              Alert.alert('Không xoá được', 'Có lỗi xảy ra khi xoá dữ liệu lịch sử.');
+            }
+          },
+        },
+      ]
+    );
+  }
+
   async function handleSubmitSheet(payload) {
     if (editingEntry) {
       return updateEntry(editingEntry.id, {
@@ -141,15 +168,26 @@ export default function HistoryScreen() {
         {/* Chức năng sao lưu & phục hồi dữ liệu JSON toàn bộ app */}
         <BackupRestoreSection theme={theme} onRestoreComplete={init} />
 
-        {/* Nút thêm lịch sử sản xuất chính */}
-        <TouchableOpacity
-          style={[styles.mainAddBtn, { backgroundColor: theme.accent }]}
-          onPress={() => handleOpenAdd()}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="add-circle-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
-          <Text style={styles.mainAddBtnTxt}>Thêm lịch sử sản xuất</Text>
-        </TouchableOpacity>
+        {/* Hàng nút chức năng chính: Thêm sản lượng & Xoá theo ngày/tháng/năm */}
+        <View style={styles.topActionButtonsRow}>
+          <TouchableOpacity
+            style={[styles.mainAddBtn, { backgroundColor: theme.accent }]}
+            onPress={() => handleOpenAdd()}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="add-circle-outline" size={17} color="#fff" style={{ marginRight: 6 }} />
+            <Text style={styles.mainAddBtnTxt}>Thêm sản lượng</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.mainDeleteBtn, { borderColor: theme.line, backgroundColor: theme.card }]}
+            onPress={() => setDeleteModalOpen(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="trash-outline" size={16} color={theme.bad} style={{ marginRight: 6 }} />
+            <Text style={[styles.mainDeleteBtnTxt, { color: theme.bad }]}>Xoá theo ngày/tháng/năm</Text>
+          </TouchableOpacity>
+        </View>
 
         <FilterChips
           options={[['day', 'Theo ngày'], ['month', 'Theo tháng'], ['year', 'Theo năm']]}
@@ -170,14 +208,31 @@ export default function HistoryScreen() {
 
             return (
               <View key={g.groupKey} style={[styles.card, { backgroundColor: theme.card, borderColor: theme.line }]}>
-                <TouchableOpacity style={styles.top} activeOpacity={0.7} onPress={() => toggleGroup(g.groupKey)}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Ionicons name="calendar-outline" size={16} color={theme.accent} style={{ marginRight: 6 }} />
-                    <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 15.5 }}>{labelFor(g.groupKey)}</Text>
-                    <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={15} color={theme.sub} style={{ marginLeft: 5 }} />
-                  </View>
-                  <Text style={{ color: theme.accent, fontWeight: '800', fontSize: 15 }}>{g.total.toLocaleString()} pcs</Text>
-                </TouchableOpacity>
+                <View style={styles.cardHeaderRow}>
+                  <TouchableOpacity
+                    style={styles.cardHeaderTouchable}
+                    activeOpacity={0.7}
+                    onPress={() => toggleGroup(g.groupKey)}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 6 }}>
+                      <Ionicons name="calendar-outline" size={16} color={theme.accent} style={{ marginRight: 6 }} />
+                      <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 15.5 }} numberOfLines={1}>
+                        {labelFor(g.groupKey)}
+                      </Text>
+                      <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={15} color={theme.sub} style={{ marginLeft: 5 }} />
+                    </View>
+                    <Text style={{ color: theme.accent, fontWeight: '800', fontSize: 15 }}>{g.total.toLocaleString()} pcs</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.groupDeleteBtn, { borderColor: theme.line, backgroundColor: theme.bg }]}
+                    onPress={() => handleDeleteGroup(g)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityLabel={`Xoá lịch sử ${labelFor(g.groupKey)}`}
+                  >
+                    <Ionicons name="trash-outline" size={15} color={theme.bad} />
+                  </TouchableOpacity>
+                </View>
 
                 <View style={styles.numsRow}>
                   <Text style={{ color: theme.sub, fontSize: 12 }}>Thủ công: {g.manualTotal.toLocaleString()}</Text>
@@ -314,16 +369,28 @@ export default function HistoryScreen() {
                       </View>
                     )}
 
-                    {/* Nút thêm nhanh vào nhóm này */}
-                    <TouchableOpacity
-                      style={[styles.addInGroupBtn, { borderColor: theme.accent }]}
-                      onPress={() => handleOpenAdd(historyGroup === 'day' ? g.groupKey : null)}
-                    >
-                      <Ionicons name="add" size={16} color={theme.accent} style={{ marginRight: 4 }} />
-                      <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>
-                        {historyGroup === 'day' ? `Thêm sản lượng ngày ${formatDisplayDate(g.groupKey)}` : 'Thêm sản lượng vào nhóm này'}
-                      </Text>
-                    </TouchableOpacity>
+                    {/* Hàng nút dưới cùng của nhóm: Thêm nhanh & Xoá toàn bộ */}
+                    <View style={styles.groupBottomActions}>
+                      <TouchableOpacity
+                        style={[styles.addInGroupBtn, { borderColor: theme.accent }]}
+                        onPress={() => handleOpenAdd(historyGroup === 'day' ? g.groupKey : null)}
+                      >
+                        <Ionicons name="add" size={15} color={theme.accent} style={{ marginRight: 4 }} />
+                        <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12 }}>
+                          {historyGroup === 'day' ? `Thêm ngày ${formatDisplayDate(g.groupKey)}` : 'Thêm sản lượng'}
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.deleteGroupBottomBtn, { borderColor: theme.bad }]}
+                        onPress={() => handleDeleteGroup(g)}
+                      >
+                        <Ionicons name="trash-outline" size={14} color={theme.bad} style={{ marginRight: 4 }} />
+                        <Text style={{ color: theme.bad, fontWeight: '700', fontSize: 12 }}>
+                          Xoá {historyGroup === 'day' ? 'ngày này' : (historyGroup === 'month' ? 'tháng này' : 'năm này')}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 )}
               </View>
@@ -343,6 +410,15 @@ export default function HistoryScreen() {
             theme={theme}
           />
         )}
+
+        {/* Modal Xoá lịch sử theo ngày / tháng / năm */}
+        <DeleteHistoryModal
+          visible={deleteModalOpen}
+          initialGroup={historyGroup}
+          onClose={() => setDeleteModalOpen(false)}
+          onConfirmDelete={removeHistoryGroup}
+          theme={theme}
+        />
       </ScrollView>
     </SafeAreaView>
   );
@@ -353,19 +429,37 @@ const styles = StyleSheet.create({
   wrap: { padding: 14, paddingBottom: 40 },
   headerTitleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   h1: { fontSize: 19, fontWeight: '800', letterSpacing: -0.3 },
+  topActionButtonsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
   mainAddBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 11,
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     borderRadius: 10,
-    marginBottom: 12,
   },
   mainAddBtnTxt: {
     color: '#fff',
     fontWeight: '700',
-    fontSize: 14,
+    fontSize: 13.5,
+  },
+  mainDeleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  mainDeleteBtnTxt: {
+    fontWeight: '700',
+    fontSize: 13,
   },
   card: {
     borderWidth: 1,
@@ -377,6 +471,25 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.04,
     shadowRadius: 3,
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  cardHeaderTouchable: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    flex: 1,
+    paddingRight: 10,
+  },
+  groupDeleteBtn: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   numsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 8 },
@@ -437,6 +550,21 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
     borderRadius: 8,
     paddingVertical: 9,
+    paddingHorizontal: 8,
+  },
+  groupBottomActions: {
+    flexDirection: 'row',
+    gap: 8,
     marginTop: 12,
+    alignItems: 'center',
+  },
+  deleteGroupBottomBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 9,
+    paddingHorizontal: 10,
   },
 });

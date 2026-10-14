@@ -24,10 +24,14 @@ export default function ContainersScreen() {
   } = useAppStore();
   const [expandedIds, setExpandedIds] = useState(new Set());
   // FEAT-15 (AC-ARCH-01/03): trạng thái mở nội dung của các thẻ đơn lưu trữ.
-  // `null` = điều khiển từng thẻ; `true`/`false` = thu gọn/mở TẤT CẢ (nút 👁).
+  // Mặc định mọi thẻ đều thu gọn (ẩn nội dung).
   // State cục bộ, không lưu (`§0.2` #9) ⇒ mở app lại thì về mặc định thu gọn.
-  const [archivesAll, setArchivesAll] = useState(null);
   const [archivesOpen, setArchivesOpen] = useState({});
+  const [showArchivesSection, setShowArchivesSection] = useState(true);
+
+  const isAnyArchiveOpen = useMemo(() => {
+    return (archives || []).some(a => !!archivesOpen[a.id]);
+  }, [archives, archivesOpen]);
   // FEAT-10: form thêm/sửa kiện. `draftPallet` = null ⇒ đang thêm mới.
   const [draft, setDraft] = useState(null); // { containerId, label, po, pallet, nextNo }
   // FEAT-25: form thêm/sửa container. `containerDraft` = null ⇒ đang đóng.
@@ -156,12 +160,22 @@ export default function ContainersScreen() {
   }, [items, draft]);
 
 
-  // FEAT-15: chạm mũi tên trên thẻ đơn lưu trữ. Nếu đang ở chế độ "thu gọn tất cả"
-  // thì chuyển sang điều khiển từng thẻ và mở đúng thẻ vừa chạm (AC-ARCH-03).
+  // FEAT-15 (AC-ARCH-03): thu gọn / mở nội dung của TẤT CẢ thẻ lưu trữ
+  function toggleAllArchives() {
+    if (isAnyArchiveOpen) {
+      setArchivesOpen({});
+    } else {
+      const next = {};
+      (archives || []).forEach(a => {
+        next[a.id] = true;
+      });
+      setArchivesOpen(next);
+    }
+  }
+
+  // FEAT-15 (AC-ARCH-03): chạm mũi tên trên từng thẻ đơn lưu trữ để mở/đóng chi tiết
   function toggleArchive(id) {
-    const isOpen = archivesAll === null ? !!archivesOpen[id] : !archivesAll;
-    setArchivesOpen(prev => ({ ...prev, [id]: !isOpen }));
-    if (archivesAll !== null) setArchivesAll(null);
+    setArchivesOpen(prev => ({ ...prev, [id]: !prev[id] }));
   }
 
   // FEAT-15: đường DUY NHẤT tới `deleteArchive` — qua `Alert` xác nhận (INV-U1).
@@ -429,29 +443,46 @@ export default function ContainersScreen() {
         {archives.length > 0 && (
           <>
             <View style={styles.archiveHeadRow}>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center' }}
+                onPress={() => setShowArchivesSection(v => !v)}
+                activeOpacity={0.7}
+              >
                 <Ionicons name="archive-outline" size={16} color={theme.ink} style={{ marginRight: 6 }} />
                 <Text style={[styles.archiveHead, { color: theme.ink, marginBottom: 0 }]}>
                   Đơn hàng đã lưu trữ ({archives.length})
                 </Text>
-              </View>
-              {/* AC-ARCH-01: thu gọn / mở nội dung của TẤT CẢ thẻ lưu trữ. */}
-              <TouchableOpacity
-                style={[styles.archiveTool, { borderColor: theme.line, backgroundColor: theme.card }]}
-                onPress={() => setArchivesAll(v => (v === false ? true : false))}
-              >
-                <Ionicons name={archivesAll === false ? 'eye-outline' : 'eye-off-outline'} size={13} color={theme.accent} style={{ marginRight: 4 }} />
-                <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 11.5 }}>
-                  {archivesAll === false ? 'Hiện nội dung' : 'Ẩn nội dung'}
-                </Text>
+                <Ionicons
+                  name={showArchivesSection ? 'chevron-up' : 'chevron-down'}
+                  size={15}
+                  color={theme.sub}
+                  style={{ marginLeft: 6 }}
+                />
               </TouchableOpacity>
+              {/* AC-ARCH-01: thu gọn / mở nội dung của TẤT CẢ thẻ lưu trữ. */}
+              {showArchivesSection && (
+                <TouchableOpacity
+                  style={[styles.archiveTool, { borderColor: theme.line, backgroundColor: theme.card }]}
+                  onPress={toggleAllArchives}
+                >
+                  <Ionicons
+                    name={isAnyArchiveOpen ? 'eye-off-outline' : 'eye-outline'}
+                    size={13}
+                    color={theme.accent}
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 11.5 }}>
+                    {isAnyArchiveOpen ? 'Ẩn nội dung' : 'Hiện nội dung'}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
-            {archives.map(a => (
+            {showArchivesSection && archives.map(a => (
               <ArchiveCard
                 key={a.id}
                 archive={a}
                 theme={theme}
-                expanded={archivesAll === null ? !!archivesOpen[a.id] : !archivesAll}
+                expanded={!!archivesOpen[a.id]}
                 onToggle={toggleArchive}
                 onDelete={runDeleteArchive}
                 busy={archivesBusy}

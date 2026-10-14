@@ -114,6 +114,14 @@ export const useAppStore = create((set, get) => ({
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
   },
 
+  removeHistoryGroup: async (groupBy, groupKey) => {
+    const res = await q.removeHistoryGroup(groupBy, groupKey);
+    if (res && res.ok === false) return res;
+    await get().refreshItems();
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return res;
+  },
+
   // ---------- ITEMS CRUD (FEAT-10) ----------
 
   addItem: async (payload) => {

@@ -1091,6 +1091,72 @@ export async function fetchHistoryEntries(groupBy, groupKey) {
 }
 
 /**
+ * Xem trước số lượng và tổng sản lượng sẽ bị xoá khi xoá theo nhóm thời gian.
+ */
+export async function previewRemoveHistoryGroup(groupBy, groupKey) {
+  const db = await getDb();
+  const expr = HISTORY_GROUP_EXPR[groupBy]?.('production_entries');
+  if (!expr) return fail('INVALID_GROUP_BY');
+
+  const key = String(groupKey ?? '').trim();
+  if (!key) return fail('INVALID_GROUP_KEY');
+
+  const countRow = await db.getFirstAsync(
+    `SELECT COUNT(*) AS c, COALESCE(SUM(qty), 0) AS q, COALESCE(SUM(defect_qty), 0) AS dq
+     FROM production_entries WHERE ${expr} = ?`,
+    [key]
+  );
+  return done({
+    count: num(countRow?.c),
+    totalQty: num(countRow?.q),
+    defectQty: num(countRow?.dq),
+  });
+}
+
+/**
+ * Xoá toàn bộ nhật ký sản xuất thuộc một nhóm thời gian (ngày, tháng hoặc năm).
+ * @param {'day'|'month'|'year'} groupBy
+ * @param {string} groupKey (VD: '2026-10-14' với day, '2026-10' với month, '2026' với year)
+ */
+export async function removeHistoryGroup(groupBy, groupKey) {
+  const db = await getDb();
+  const expr = HISTORY_GROUP_EXPR[groupBy]?.('production_entries');
+  if (!expr) return fail('INVALID_GROUP_BY');
+
+  const key = String(groupKey ?? '').trim();
+  if (!key) return fail('INVALID_GROUP_KEY');
+
+  if (groupBy === 'day' && !isValidDate(key)) {
+    return fail('INVALID_DATE');
+  }
+  if (groupBy === 'month' && !/^\d{4}-\d{2}$/.test(key)) {
+    return fail('INVALID_MONTH');
+  }
+  if (groupBy === 'year' && !/^\d{4}$/.test(key)) {
+    return fail('INVALID_YEAR');
+  }
+
+  const countRow = await db.getFirstAsync(
+    `SELECT COUNT(*) AS c, COALESCE(SUM(qty), 0) AS q, COALESCE(SUM(defect_qty), 0) AS dq
+     FROM production_entries WHERE ${expr} = ?`,
+    [key]
+  );
+  const count = num(countRow?.c);
+  const totalQty = num(countRow?.q);
+  const defectQty = num(countRow?.dq);
+
+  if (count === 0) {
+    return fail('NO_ENTRIES_TO_DELETE');
+  }
+
+  return withTransaction(db, async () => {
+    // production_defects và production_entry_refs có ON DELETE CASCADE
+    await db.runAsync(`DELETE FROM production_entries WHERE ${expr} = ?`, [key]);
+    return done({ deletedCount: count, totalQty, defectQty });
+  });
+}
+
+/**
  * Danh sách đơn đã lưu trữ.
  *
  * Giữ **tên field cũ** (snake_case) vì `ArchiveCard` đọc thẳng các tên này — đổi tên ở đây sẽ

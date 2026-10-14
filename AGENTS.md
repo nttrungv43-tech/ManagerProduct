@@ -19,7 +19,7 @@ npx expo lint               # lint
 npx tsc --noEmit            # typecheck
 npx expo-doctor             # diagnose dependency and config issues
 npx expo install --fix      # fix incompatible package versions
-npm test                    # 14 script unit + 5 kịch bản E2E / 539 ca: unit test hàm thuần (utils/validateQty.js, utils/palletKey.js, utils/deleteItem.js, utils/poSummary.js, utils/itemRows.js, utils/deleteItemsByPo.js, utils/date.js, utils/archiveDelete.js, utils/packingV1.js, utils/importFormat.js, utils/packingV1Import.js, utils/schemaColumns.js, utils/refFormat.js) + schema mới trên SQLite thật (scripts/test-schemaV2.mjs) + 5 kịch bản E2E khởi tạo DB (scripts/test-dbInit.mjs), không cần Expo/máy thật
+npm test                    # 23 script unit/integration/E2E / 727 ca đạt 100%: unit test hàm thuần + schema SQLite thật + CRUD mã/kiện/container/lịch sử/backup/restore/excel, không cần Expo/máy thật
 npm run test:pallet         # chỉ test khoá pallet / remap trạng thái tick (FEAT-10)
 npm run test:deletePo       # chỉ test xoá hàng loạt theo PO (FEAT-13)
 npm run test:date           # chỉ test ngày cục bộ (BUG-02)

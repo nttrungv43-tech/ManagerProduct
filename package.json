@@ -48,12 +48,13 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "node --no-warnings scripts/test-validateQty.mjs && node --no-warnings scripts/test-deleteItem.mjs && node --no-warnings scripts/test-deleteItemsByPo.mjs && node --no-warnings scripts/test-date.mjs && node --no-warnings scripts/test-archiveDelete.mjs && node --no-warnings scripts/test-packingV1.mjs && node --no-warnings scripts/test-importFormat.mjs && node --no-warnings scripts/test-backupFormat.mjs && node --no-warnings scripts/test-backupRestore.mjs && npm run --silent test:excelParser && npm run --silent test:refFormat && npm run --silent test:finishPo && npm run --silent test:container && npm run --silent test:palletCrud && npm run --silent test:lastUpdated && npm run --silent test:schemaV2 && npm run --silent test:dbInit && npm run --silent test:queries && npm run --silent test:sync && npm run --silent test:historyCrud && npm run --silent test:multiPo",
+    "test": "node --no-warnings scripts/test-validateQty.mjs && node --no-warnings scripts/test-deleteItem.mjs && node --no-warnings scripts/test-deleteItemsByPo.mjs && node --no-warnings scripts/test-date.mjs && node --no-warnings scripts/test-archiveDelete.mjs && node --no-warnings scripts/test-archiveCollapse.mjs && node --no-warnings scripts/test-packingV1.mjs && node --no-warnings scripts/test-importFormat.mjs && node --no-warnings scripts/test-backupFormat.mjs && node --no-warnings scripts/test-backupRestore.mjs && npm run --silent test:excelParser && npm run --silent test:refFormat && npm run --silent test:finishPo && npm run --silent test:container && npm run --silent test:palletCrud && npm run --silent test:lastUpdated && npm run --silent test:schemaV2 && npm run --silent test:dbInit && npm run --silent test:queries && npm run --silent test:sync && npm run --silent test:historyCrud && npm run --silent test:multiPo && npm run --silent test:deleteHistoryGroup",
     "test:validate": "node --no-warnings scripts/test-validateQty.mjs",
     "test:delete": "node --no-warnings scripts/test-deleteItem.mjs",
     "test:deletePo": "node --no-warnings scripts/test-deleteItemsByPo.mjs",
     "test:date": "node --no-warnings scripts/test-date.mjs",
     "test:archive": "node --no-warnings scripts/test-archiveDelete.mjs",
+    "test:archiveCollapse": "node --no-warnings scripts/test-archiveCollapse.mjs",
     "convert:packing": "node --no-warnings scripts/convert-packing-data.mjs",
     "test:packing": "node --no-warnings scripts/test-packingV1.mjs",
     "test:format": "node --no-warnings scripts/test-importFormat.mjs",
@@ -70,7 +71,8 @@
     "test:queries": "node --no-warnings --import ./scripts/e2e-sqlite/register.mjs scripts/test-queries.mjs",
     "test:sync": "node --no-warnings --import ./scripts/e2e-sqlite/register.mjs scripts/test-syncPalletAndItems.mjs",
     "test:historyCrud": "node --no-warnings --import ./scripts/e2e-sqlite/register.mjs scripts/test-historyCrud.mjs",
-    "test:multiPo": "node --no-warnings scripts/test-multiPoContainer.mjs"
+    "test:multiPo": "node --no-warnings scripts/test-multiPoContainer.mjs",
+    "test:deleteHistoryGroup": "node --no-warnings --import ./scripts/e2e-sqlite/register.mjs scripts/test-deleteHistoryGroup.mjs"
   },
   "private": true
 }
