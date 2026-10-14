@@ -69,6 +69,12 @@ try {
   const multi = items.filter(i => i.ntk === '1072017GF');
   eq('1072017GF tách thành 6 thẻ (không cần splitItemRows)', multi.length, 6);
   eq('… và tổng 6 thẻ = 2808', multi.reduce((s, i) => s + i.target, 0), 2808);
+  const itemsWithRef = items.filter(i => i.order_ref);
+  check('có các thẻ mang order_ref', itemsWithRef.length > 0);
+  const sampleItemRef = items.find(i => i.ntk === '1063048GF');
+  check('thẻ 1063048GF có order_ref và refs', sampleItemRef?.refs?.length > 0 && !!sampleItemRef?.order_ref);
+  const item2920 = items.find(i => i.ntk === '1072014GF' && i.po === '2920');
+  eq('thẻ 1072014GF (PO 2920) gom đủ 2 ref ở tab mã sản phẩm', item2920?.order_ref, 'D580422, D581032');
 
   // ══════════════════════════════════════════════════════════════════════
   console.log('3) `fetchPoSummaries` — cột "Đã sản xuất"/"Còn lại" là SỐ THẬT');
@@ -147,6 +153,16 @@ try {
   let cvs = await q.fetchContainersView(batchId);
   eq('đọc được 12 container', cvs.length, 12);
   eq('tổng kiện = 220', cvs.reduce((s, c) => s + c.pallets.length, 0), src.packages);
+  const allPalletItems = cvs.flatMap(c => c.pallets.flatMap(p => p.items));
+  const palletItemsWithRef = allPalletItems.filter(it => it.order_ref);
+  check('có các kiện chứa item mang order_ref', palletItemsWithRef.length > 0);
+  const c2920 = cvs.find(c => c.pallets.some(p => p.items.some(it => it.po === '2920' && it.ntk === '1072014GF')));
+  const p5Item = c2920?.pallets.find(p => p.pallet_no === 5)?.items.find(it => it.po === '2920' && it.ntk === '1072014GF');
+  const p6Item = c2920?.pallets.find(p => p.pallet_no === 6)?.items.find(it => it.po === '2920' && it.ntk === '1072014GF');
+  const p9Item = c2920?.pallets.find(p => p.pallet_no === 9)?.items.find(it => it.po === '2920' && it.ntk === '1072014GF');
+  eq('PO 2920 kiện 5 mang ref riêng D580422', p5Item?.order_ref, 'D580422');
+  eq('PO 2920 kiện 6 mang ref riêng D580422', p6Item?.order_ref, 'D580422');
+  eq('PO 2920 kiện 9 mang ref riêng D581032', p9Item?.order_ref, 'D581032');
   const pal = cvs[0].pallets[0];
   const palLine = pal.items[0];
   check('tick 1 dòng hàng trong kiện', (await q.setPalletLineDone(palLine.id, true)).ok);

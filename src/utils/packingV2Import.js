@@ -194,7 +194,13 @@ export function buildPalletPlan(json, posRows, lines) {
             // Dòng hàng không có trong `item_summary` ⇒ bỏ và ghi cảnh báo ở bước kiểm tra;
             // ghi `pallet_lines` với `lineIdx: null` sẽ vi phạm FK ⇒ bỏ hẳn ở đây.
             if (!itemCode || lIdx === undefined) continue;
-            palletLines.push({ palletIdx: pIdx, lineIdx: lIdx, qty: toInt(it?.qty) });
+            const refNo = String(it?.order_ref ?? '').trim();
+            palletLines.push({
+              palletIdx: pIdx,
+              lineIdx: lIdx,
+              qty: toInt(it?.qty),
+              refNo: refNo || null,
+            });
           }
         }
       }

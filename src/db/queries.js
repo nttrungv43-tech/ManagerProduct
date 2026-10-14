@@ -73,25 +73,29 @@ export async function fetchItemsWithStats(batchId) {
     `SELECT * FROM v_line_progress WHERE order_batch_id = ? ORDER BY po, item_code`,
     [id]
   );
-  return rows.map(r => ({
-    order_line_id: r.order_line_id,
-    order_batch_id: r.order_batch_id,
-    ntk: r.item_code,
-    po: r.po,
-    target: num(r.target),
-    produced: num(r.produced),
-    defect: num(r.defect),
-    remaining: num(r.remaining),
-    nw_kg: r.nw_kg,
-    gw_kg: r.gw_kg,
-    volume_cbm: r.volume_cbm,
-    package_count: r.package_count,
+  return rows.map(r => {
     // FEAT-22: chuỗi `ref_no:target` của riêng thẻ (xem `v_line_progress`). `NULL` ⇒ `[]` (INV-I1).
-    refs: parseRefs(r.refs),
-    // FEAT-23: `ref:đã_làm:kế_hoạch` + sản lượng chưa gắn số hiệu.
-    refProgress: parseRefProgress(r.ref_progress),
-    unattributedProduced: num(r.unattributed_produced),
-  }));
+    const parsedRefs = parseRefs(r.refs);
+    return {
+      order_line_id: r.order_line_id,
+      order_batch_id: r.order_batch_id,
+      ntk: r.item_code,
+      po: r.po,
+      target: num(r.target),
+      produced: num(r.produced),
+      defect: num(r.defect),
+      remaining: num(r.remaining),
+      nw_kg: r.nw_kg,
+      gw_kg: r.gw_kg,
+      volume_cbm: r.volume_cbm,
+      package_count: r.package_count,
+      refs: parsedRefs,
+      order_ref: parsedRefs.map(x => x.ref_no).join(', ') || null,
+      // FEAT-23: `ref:đã_làm:kế_hoạch` + sản lượng chưa gắn số hiệu.
+      refProgress: parseRefProgress(r.ref_progress),
+      unattributedProduced: num(r.unattributed_produced),
+    };
+  });
 }
 
 /**
@@ -626,7 +630,12 @@ export async function fetchContainersView(batchId) {
     [id]
   );
   const lines = await db.getAllAsync(
-    `SELECT pl.id, pl.pallet_id, pl.order_line_id, pl.qty, pl.done, ol.item_code, pos.code AS po
+    `SELECT pl.id, pl.pallet_id, pl.order_line_id, pl.qty, pl.done, pl.ref_no, ol.item_code, pos.code AS po,
+            COALESCE(
+              NULLIF(TRIM(pl.ref_no), ''),
+              (SELECT GROUP_CONCAT(r.ref_no, ', ') FROM order_line_refs r WHERE r.order_line_id = ol.id),
+              (SELECT GROUP_CONCAT(ir.ref_no, ', ') FROM item_refs ir WHERE ir.order_batch_id = pos.order_batch_id AND ir.item_code = ol.item_code)
+            ) AS order_ref
      FROM pallet_lines pl
      JOIN order_lines ol ON ol.id = pl.order_line_id
      JOIN pos ON pos.id = ol.po_id
@@ -644,6 +653,7 @@ export async function fetchContainersView(batchId) {
     palletById.get(l.pallet_id)?.items.push({
       id: l.id, order_line_id: l.order_line_id, ntk: l.item_code,
       qty: num(l.qty), done: !!l.done, po: l.po,
+      order_ref: l.order_ref || null,
     });
   }
   return [...byContainer.values()];
@@ -712,8 +722,8 @@ export async function addPallet(batchId, containerId, { no, items }) {
     );
     for (const it of norm) {
       await db.runAsync(
-        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty, done) VALUES (?, ?, ?, 0)`,
-        [res.lastInsertRowId, it.order_line_id, it.qty]
+        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty, done, ref_no) VALUES (?, ?, ?, 0, ?)`,
+        [res.lastInsertRowId, it.order_line_id, it.qty, it.order_ref || it.ref_no || null]
       );
     }
 
@@ -775,8 +785,8 @@ export async function updatePallet(batchId, containerId, palletNo, { no, items }
     for (const it of norm) {
       const isDone = it.done !== undefined ? (it.done ? 1 : 0) : (doneByLineId.get(it.order_line_id) ?? 0);
       await db.runAsync(
-        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty, done) VALUES (?, ?, ?, ?)`,
-        [pal.id, it.order_line_id, it.qty, isDone]
+        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty, done, ref_no) VALUES (?, ?, ?, ?, ?)`,
+        [pal.id, it.order_line_id, it.qty, isDone, it.order_ref || it.ref_no || null]
       );
     }
     await db.runAsync(
@@ -1621,8 +1631,8 @@ export async function importPackingV1(batchId, jsonData) {
 
     for (const pl of plan.palletLines) {
       await db.runAsync(
-        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty) VALUES (?, ?, ?)`,
-        [palletIds[pl.palletIdx], lineIds[pl.lineIdx], pl.qty]
+        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty, ref_no) VALUES (?, ?, ?, ?)`,
+        [palletIds[pl.palletIdx], lineIds[pl.lineIdx], pl.qty, pl.refNo || null]
       );
     }
 
@@ -1933,8 +1943,8 @@ export async function restoreDatabaseBackup(backupPayload) {
       // 13. Nạp lại pallet_lines (giữ nguyên ID)
       for (const pl of data.pallet_lines) {
         await db.runAsync(
-          'INSERT INTO pallet_lines (id, pallet_id, order_line_id, qty, done) VALUES (?, ?, ?, ?, ?)',
-          [pl.id, pl.pallet_id, pl.order_line_id, pl.qty ?? 0, pl.done ?? 0]
+          'INSERT INTO pallet_lines (id, pallet_id, order_line_id, qty, done, ref_no) VALUES (?, ?, ?, ?, ?, ?)',
+          [pl.id, pl.pallet_id, pl.order_line_id, pl.qty ?? 0, pl.done ?? 0, pl.ref_no ?? null]
         );
       }
 

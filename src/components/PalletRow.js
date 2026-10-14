@@ -5,7 +5,7 @@ import { View, Text, TouchableOpacity, Alert, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function PalletRow({
-  pallet, isMultiPo, onToggleLine, onEditPallet, onDeletePallet, theme,
+  pallet, isMultiPo, onToggleLine, onEditPallet, onDeletePallet, theme, highlightNtk = '',
 }) {
   const qty = pallet.items.reduce((s, it) => s + it.qty, 0);
   const palletPos = new Set((pallet.items || []).map(it => it.po).filter(Boolean));
@@ -78,22 +78,84 @@ export default function PalletRow({
                 {it.done && <Ionicons name="checkmark" size={15} color="#fff" />}
               </View>
               <View style={styles.subItemContent}>
+                {(() => {
+                  const q = highlightNtk.trim().toLowerCase();
+                  const isMatch = Boolean(q && String(it.ntk || '').toLowerCase().includes(q));
+                  return (
+                    <View
+                      style={[
+                        styles.ntkBadge,
+                        {
+                          backgroundColor: isMatch ? theme.accent + '35' : theme.bg,
+                          borderColor: isMatch ? theme.accent : theme.line,
+                        },
+                      ]}
+                    >
+                      <Ionicons name="pricetag" size={11} color={theme.accent} style={{ marginRight: 4 }} />
+                      <Text style={[styles.ntkPrefix, { color: theme.sub }]}>Mã</Text>
+                      <Text
+                        style={[
+                          styles.ntkCode,
+                          {
+                            color: it.done ? theme.good : theme.ink,
+                            textDecorationLine: it.done ? 'line-through' : 'none',
+                          },
+                        ]}
+                      >
+                        {it.ntk}
+                      </Text>
+                    </View>
+                  );
+                })()}
+
+                <Text
+                  style={[
+                    styles.itemQtyText,
+                    {
+                      color: it.done ? theme.good : theme.ink,
+                      textDecorationLine: it.done ? 'line-through' : 'none',
+                      opacity: it.done ? 0.8 : 1,
+                    },
+                  ]}
+                >
+                  × <Text style={{ fontWeight: '800' }}>{it.qty.toLocaleString('vi-VN')}</Text> pcs
+                </Text>
+
                 {hasMultiPo && Boolean(it.po) && (
                   <View style={[styles.poBadge, { backgroundColor: theme.accent + '18', borderColor: theme.accent + '40' }]}>
                     <Text style={[styles.poBadgeText, { color: theme.accent }]}>PO {it.po}</Text>
                   </View>
                 )}
-                <Text
-                  style={{
-                    color: it.done ? theme.good : theme.ink,
-                    fontSize: 12.5,
-                    fontWeight: it.done ? '400' : '600',
-                    textDecorationLine: it.done ? 'line-through' : 'none',
-                    opacity: it.done ? 0.8 : 1,
-                  }}
-                >
-                  Mã {it.ntk} × {it.qty.toLocaleString('vi-VN')}
-                </Text>
+
+                {Boolean(it.order_ref) && (
+                  <View
+                    style={[
+                      styles.refBadge,
+                      {
+                        backgroundColor: (highlightNtk && String(it.order_ref || '').toLowerCase().includes(highlightNtk.trim().toLowerCase()))
+                          ? theme.accent + '35'
+                          : theme.sub + '18',
+                        borderColor: (highlightNtk && String(it.order_ref || '').toLowerCase().includes(highlightNtk.trim().toLowerCase()))
+                          ? theme.accent
+                          : theme.sub + '40',
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.refBadgeText,
+                        {
+                          color: (highlightNtk && String(it.order_ref || '').toLowerCase().includes(highlightNtk.trim().toLowerCase()))
+                            ? theme.accent
+                            : theme.ink,
+                          fontWeight: '600',
+                        },
+                      ]}
+                    >
+                      Ref {it.order_ref}
+                    </Text>
+                  </View>
+                )}
               </View>
             </TouchableOpacity>
           ))}
@@ -106,7 +168,10 @@ export default function PalletRow({
   // Kiện một mã
   const line = pallet.items[0];
   const done = !!line?.done;
-  const itemsTxt = pallet.items.map(it => `Mã ${it.ntk} × ${it.qty.toLocaleString('vi-VN')}`).join(', ');
+
+  const q = highlightNtk.trim().toLowerCase();
+  const isMatchSingle = Boolean(q && String(line?.ntk || '').toLowerCase().includes(q));
+  const isMatchRefSingle = Boolean(q && line?.order_ref && String(line.order_ref).toLowerCase().includes(q));
 
   return (
     <View style={[styles.row, { borderTopColor: theme.line }]}>
@@ -139,35 +204,63 @@ export default function PalletRow({
             >
               Kiện {palletNo} — {qty.toLocaleString('vi-VN')} pcs
             </Text>
-            {hasMultiPo && line?.po ? (
-              <View style={styles.subItemContent}>
-                <View style={[styles.poBadge, { backgroundColor: theme.accent + '18', borderColor: theme.accent + '40' }]}>
-                  <Text style={[styles.poBadgeText, { color: theme.accent }]}>PO {line.po}</Text>
-                </View>
-                <Text
-                  style={{
-                    color: done ? theme.good : theme.sub,
-                    fontSize: 12,
-                    textDecorationLine: done ? 'line-through' : 'none',
-                    opacity: done ? 0.8 : 1,
-                  }}
+            {line ? (
+              <View style={[styles.subItemContent, { marginTop: 4 }]}>
+                <View
+                  style={[
+                    styles.ntkBadge,
+                    {
+                      backgroundColor: isMatchSingle ? theme.accent + '35' : theme.bg,
+                      borderColor: isMatchSingle ? theme.accent : theme.line,
+                    },
+                  ]}
                 >
-                  Mã {line.ntk} × {line.qty.toLocaleString('vi-VN')}
-                </Text>
+                  <Ionicons name="pricetag" size={12} color={theme.accent} style={{ marginRight: 4 }} />
+                  <Text style={[styles.ntkPrefix, { color: theme.sub }]}>Mã</Text>
+                  <Text
+                    style={[
+                      styles.ntkCode,
+                      {
+                        color: done ? theme.good : theme.ink,
+                        textDecorationLine: done ? 'line-through' : 'none',
+                      },
+                    ]}
+                  >
+                    {line.ntk}
+                  </Text>
+                </View>
+
+                {hasMultiPo && Boolean(line.po) && (
+                  <View style={[styles.poBadge, { backgroundColor: theme.accent + '18', borderColor: theme.accent + '40' }]}>
+                    <Text style={[styles.poBadgeText, { color: theme.accent }]}>PO {line.po}</Text>
+                  </View>
+                )}
+
+                {Boolean(line.order_ref) && (
+                  <View
+                    style={[
+                      styles.refBadge,
+                      {
+                        backgroundColor: isMatchRefSingle ? theme.accent + '35' : theme.sub + '18',
+                        borderColor: isMatchRefSingle ? theme.accent : theme.sub + '40',
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.refBadgeText,
+                        {
+                          color: isMatchRefSingle ? theme.accent : theme.ink,
+                          fontWeight: '600',
+                        },
+                      ]}
+                    >
+                      Ref {line.order_ref}
+                    </Text>
+                  </View>
+                )}
               </View>
-            ) : (
-              <Text
-                style={{
-                  color: done ? theme.good : theme.sub,
-                  fontSize: 12,
-                  marginTop: 2,
-                  textDecorationLine: done ? 'line-through' : 'none',
-                  opacity: done ? 0.8 : 1,
-                }}
-              >
-                {itemsTxt}
-              </Text>
-            )}
+            ) : null}
           </View>
         </View>
       </TouchableOpacity>
@@ -204,6 +297,27 @@ const styles = StyleSheet.create({
     gap: 6,
     flex: 1,
   },
+  ntkBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  ntkPrefix: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    marginRight: 4,
+  },
+  ntkCode: {
+    fontSize: 13.5,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  itemQtyText: {
+    fontSize: 12.5,
+  },
   poBadge: {
     paddingHorizontal: 6,
     paddingVertical: 1.5,
@@ -213,6 +327,15 @@ const styles = StyleSheet.create({
   poBadgeText: {
     fontSize: 11,
     fontWeight: '700',
+  },
+  refBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  refBadgeText: {
+    fontSize: 11,
   },
   actions: { flexDirection: 'row', gap: 16, marginTop: 8, paddingLeft: 40 },
   actionBtn: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },

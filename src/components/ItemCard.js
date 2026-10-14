@@ -428,6 +428,13 @@ export default function ItemCard({
             <View style={[styles.poBadge, { backgroundColor: theme.accent + '22', borderColor: theme.accent }]}>
               <Text style={[styles.poBadgeText, { color: theme.accent }]}>PO {item.po}</Text>
             </View>
+            {item.refs && item.refs.length > 0 && (
+              <View style={[styles.refBadge, { backgroundColor: theme.sub + '18', borderColor: theme.sub + '44' }]}>
+                <Text style={[styles.refBadgeText, { color: theme.ink }]}>
+                  Ref: {item.refs.map(r => r.ref_no).join(', ')}
+                </Text>
+              </View>
+            )}
           </View>
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>

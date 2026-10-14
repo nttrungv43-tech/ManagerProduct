@@ -36,6 +36,7 @@ function initialRows(pallet, itemOptions) {
       order_line_id: it.order_line_id ?? null,
       po: it.po ?? null,
       done: it.done ?? false,
+      order_ref: it.order_ref ?? null,
     }));
   }
   const defaultOption = itemOptions?.[0];
@@ -157,6 +158,7 @@ export default function PalletEditSheet({
         qty: q,
         order_line_id: r.order_line_id ?? null,
         done: r.done ?? false,
+        order_ref: r.order_ref ?? null,
       });
     }
 

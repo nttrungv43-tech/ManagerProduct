@@ -137,6 +137,26 @@ export default function ItemEditSheet({ item, pos, defaultPo, onClose, onSubmit,
                     {isEdit ? `Sửa mã ${item.ntk}` : 'Thêm mã hàng'}
                   </Text>
 
+                  {isEdit && Boolean((item?.refs && item.refs.length > 0) || item?.order_ref) && (
+                    <View style={[styles.refBox, { backgroundColor: theme.bg, borderColor: theme.line }]}>
+                      <Text style={styles.refTitle(theme)}>
+                        Số hiệu nhà máy (order_ref)
+                      </Text>
+                      {item?.refs && item.refs.length > 0 ? (
+                        item.refs.map(r => (
+                          <Text key={r.ref_no} style={[styles.refItemText, { color: theme.ink }]}>
+                            • Ref: <Text style={{ fontWeight: '700' }}>{r.ref_no}</Text>
+                            {r.target ? ` — KH: ${r.target.toLocaleString('vi-VN')} pcs` : ''}
+                          </Text>
+                        ))
+                      ) : (
+                        <Text style={[styles.refItemText, { color: theme.ink }]}>
+                          • Ref: <Text style={{ fontWeight: '700' }}>{item.order_ref}</Text>
+                        </Text>
+                      )}
+                    </View>
+                  )}
+
                   <Text style={styles.label(theme)}>Mã hàng</Text>
                   <TextInput
                     style={styles.input(theme)}
@@ -239,6 +259,24 @@ const styles = StyleSheet.create({
     maxHeight: '90%',
   },
   title: { fontSize: 17, fontWeight: '700', marginBottom: 4 },
+  refBox: {
+    marginTop: 8,
+    marginBottom: 2,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  refTitle: theme => ({
+    color: theme.sub,
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  }),
+  refItemText: {
+    fontSize: 12.5,
+    marginTop: 2,
+  },
   label: theme => ({ color: theme.sub, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', marginTop: 14, marginBottom: 6 }),
   labelNoMargin: theme => ({ color: theme.sub, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }),
   input: theme => ({ borderWidth: 1, borderColor: theme.line, backgroundColor: theme.bg, color: theme.ink, borderRadius: 10, padding: 12, fontSize: 16, fontWeight: '600' }),

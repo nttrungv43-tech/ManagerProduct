@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, useColorScheme } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, useColorScheme, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '@/store/useAppStore';
@@ -22,6 +22,7 @@ export default function ContainersScreen() {
     addPallet, updatePallet, removePallet, deleteArchive, archivesBusy,
     updateContainer, removeContainer, addContainer,
   } = useAppStore();
+  const [searchQuery, setSearchQuery] = useState('');
   const [expandedIds, setExpandedIds] = useState(new Set());
   // FEAT-15 (AC-ARCH-01/03): trạng thái mở nội dung của các thẻ đơn lưu trữ.
   // Mặc định mọi thẻ đều thu gọn (ẩn nội dung).
@@ -55,12 +56,24 @@ export default function ContainersScreen() {
   }, [containers]);
 
   const filtered = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
     return containers.filter(c => {
-      if (activeContainerFilter === 'all') return true;
-      if (c.po === activeContainerFilter) return true;
-      return (c.pallets || []).some(p => (p.items || []).some(it => it.po === activeContainerFilter));
+      const matchPo = activeContainerFilter === 'all'
+        ? true
+        : (c.po === activeContainerFilter || (c.pallets || []).some(p => (p.items || []).some(it => it.po === activeContainerFilter)));
+      if (!matchPo) return false;
+
+      if (!q) return true;
+      return (c.pallets || []).some(p =>
+        (p.items || []).some(it =>
+          String(it.ntk || '').toLowerCase().includes(q) ||
+          String(it.order_ref || '').toLowerCase().includes(q)
+        )
+      );
     });
-  }, [containers, activeContainerFilter]);
+  }, [containers, activeContainerFilter, searchQuery]);
+
+  const isSearching = Boolean(searchQuery.trim());
 
   // Một kiện "đóng xong" khi **mọi** dòng hàng của nó đã tick. Với kiện một mã (thực tế
   // `Dmac.json` có 220/220 kiện một mã) đây đúng là tick của cả kiện — trước đây cần khoá
@@ -74,10 +87,19 @@ export default function ContainersScreen() {
 
   function toggleExpand(id) {
     const next = new Set(expandedIds);
-    if (next.has(id)) {
-      next.delete(id);
+    if (isSearching) {
+      const key = `closed_${id}`;
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
     } else {
-      next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
     }
     setExpandedIds(next);
   }
@@ -289,42 +311,110 @@ export default function ContainersScreen() {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.bg }]} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.wrap}>
-        <View style={styles.headerRow}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Ionicons name="cube" size={22} color={theme.accent} style={{ marginRight: 8 }} />
-            <Text style={[styles.h1, { color: theme.ink }]}>Container</Text>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={styles.wrap}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
+          <View style={styles.headerRow}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Ionicons name="cube" size={22} color={theme.accent} style={{ marginRight: 8 }} />
+              <Text style={[styles.h1, { color: theme.ink }]}>Container</Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.addContainerBtn, { borderColor: theme.line, backgroundColor: theme.card }]}
+              onPress={openAddContainer}
+            >
+              <Ionicons name="add-circle-outline" size={16} color={theme.accent} style={{ marginRight: 4 }} />
+              <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>Thêm container</Text>
+            </TouchableOpacity>
           </View>
-          <TouchableOpacity
-            style={[styles.addContainerBtn, { borderColor: theme.line, backgroundColor: theme.card }]}
-            onPress={openAddContainer}
-          >
-            <Ionicons name="add-circle-outline" size={16} color={theme.accent} style={{ marginRight: 4 }} />
-            <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>Thêm container</Text>
-          </TouchableOpacity>
-        </View>
-        {/* FEAT-14 (AC-CONT-09): chip lọc PO chỉ có nghĩa khi đã có container. */}
-        {containers.length > 0 && (
-          <FilterChips
-            options={[['all', 'Tất cả PO'], ...cpos.map(p => [p, p])]}
-            activeValue={activeContainerFilter}
-            onSelect={setContainerFilter}
-            theme={theme}
-          />
-        )}
 
-        {/* FEAT-14 (AC-CONT-09): đơn mới sau khi hoàn tất là trắng — KHÔNG fallback seed. */}
-        {containers.length === 0 && (
-          <View style={[styles.emptyBox, { backgroundColor: theme.card, borderColor: theme.line }]}>
-            <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 14 }}>Chưa có container trong đơn hàng này.</Text>
-            <Text style={{ color: theme.sub, fontSize: 12.5, marginTop: 6 }}>
-              Bấm “Nhập JSON” ở tab Mã hàng và chọn file packing list để nạp container/kiện của đơn mới.
-            </Text>
-          </View>
-        )}
+          {/* Ô tìm kiếm mã hàng */}
+          {containers.length > 0 && (
+            <View style={[styles.searchBox, { borderColor: theme.line, backgroundColor: theme.card }]}>
+              <Ionicons name="search-outline" size={18} color={theme.sub} style={{ marginRight: 8 }} />
+              <TextInput
+                style={[styles.searchInput, { color: theme.ink }]}
+                placeholder="Tìm theo mã hàng, số hiệu (VD: 106160, D980470)..."
+                placeholderTextColor={theme.sub}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                autoCapitalize="none"
+                autoCorrect={false}
+                clearButtonMode="while-editing"
+              />
+              {searchQuery ? (
+                <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="close-circle" size={18} color={theme.sub} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          )}
+
+          {/* Dòng trạng thái kết quả tìm kiếm */}
+          {searchQuery.trim() ? (
+            <View style={styles.searchResultRow}>
+              <Text style={{ color: theme.sub, fontSize: 12 }}>
+                Tìm thấy <Text style={{ color: theme.accent, fontWeight: '700' }}>{filtered.length}</Text>/{containers.length} container chứa &ldquo;{searchQuery.trim()}&rdquo;
+              </Text>
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Text style={{ color: theme.accent, fontSize: 12, fontWeight: '600' }}>
+                  Xoá tìm kiếm
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {/* FEAT-14 (AC-CONT-09): chip lọc PO chỉ có nghĩa khi đã có container. */}
+          {containers.length > 0 && (
+            <FilterChips
+              options={[['all', 'Tất cả PO'], ...cpos.map(p => [p, p])]}
+              activeValue={activeContainerFilter}
+              onSelect={setContainerFilter}
+              theme={theme}
+            />
+          )}
+
+          {/* FEAT-14 (AC-CONT-09): đơn mới sau khi hoàn tất là trắng — KHÔNG fallback seed. */}
+          {containers.length === 0 && (
+            <View style={[styles.emptyBox, { backgroundColor: theme.card, borderColor: theme.line }]}>
+              <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 14 }}>Chưa có container trong đơn hàng này.</Text>
+              <Text style={{ color: theme.sub, fontSize: 12.5, marginTop: 6 }}>
+                Bấm “Nhập JSON” ở tab Mã hàng và chọn file packing list để nạp container/kiện của đơn mới.
+              </Text>
+            </View>
+          )}
+
+          {/* Trạng thái không tìm thấy container khi lọc hoặc tìm kiếm */}
+          {containers.length > 0 && filtered.length === 0 && (
+            <View style={[styles.emptyBox, { backgroundColor: theme.card, borderColor: theme.line, alignItems: 'center' }]}>
+              <Ionicons name="search" size={26} color={theme.sub} style={{ marginBottom: 6 }} />
+              <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 14 }}>
+                Không tìm thấy container phù hợp
+              </Text>
+              <Text style={{ color: theme.sub, fontSize: 12.5, marginTop: 4, textAlign: 'center' }}>
+                {searchQuery.trim()
+                  ? `Không có container nào chứa kiện có mã hàng hoặc số hiệu “${searchQuery.trim()}”.`
+                  : `Không có container nào thuộc PO “${activeContainerFilter}”.`}
+              </Text>
+              {searchQuery.trim() ? (
+                <TouchableOpacity
+                  style={[styles.clearSearchBtn, { backgroundColor: theme.accent }]}
+                  onPress={() => setSearchQuery('')}
+                >
+                  <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12.5 }}>Xoá tìm kiếm</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          )}
 
         {filtered.map(c => {
-          const isOpen = expandedIds.has(c.id);
+          const isOpen = isSearching ? !expandedIds.has(`closed_${c.id}`) : expandedIds.has(c.id);
           const sortedPallets = (c.pallets ?? []).sort(
             (a, b) => (a.pallet_no ?? a.no) - (b.pallet_no ?? b.no)
           );
@@ -416,6 +506,7 @@ export default function ContainersScreen() {
                       onEditPallet={pallet => openEditPallet(c, pallet, containerPos)}
                       onDeletePallet={pallet => confirmDeletePallet(c, pallet)}
                       theme={theme}
+                      highlightNtk={searchQuery.trim()}
                     />
                   ))}
                 </View>
@@ -539,7 +630,8 @@ export default function ContainersScreen() {
           finishing={finishing}
           theme={theme}
         />
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -549,6 +641,37 @@ const styles = StyleSheet.create({
   wrap: { padding: 14, paddingBottom: 40 },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   h1: { fontSize: 19, fontWeight: '800', letterSpacing: -0.3 },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    marginTop: 6,
+    marginBottom: 8,
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 2,
+  },
+  searchInput: { flex: 1, fontSize: 14.5, padding: 0 },
+  searchResultRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+    marginTop: 2,
+    paddingHorizontal: 2,
+  },
+  clearSearchBtn: {
+    alignSelf: 'center',
+    marginTop: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
   addContainerBtn: {
     borderWidth: 1,
     borderRadius: 999,

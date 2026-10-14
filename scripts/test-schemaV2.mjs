@@ -215,8 +215,8 @@ function applyPlan(d, p, importedAt = '2026-10-04', existingBatchId = null) {
     Number(insPal.run(containerIds[x.containerIdx], posIds[x.poIdx], x.palletNo, x.cNo, x.isMixed,
       x.length_m, x.width_m, x.height_m, x.volume_cbm, x.nw_kg, x.gw_kg).lastInsertRowid));
 
-  const insPl = d.prepare(`INSERT INTO pallet_lines (pallet_id, order_line_id, qty) VALUES (?, ?, ?)`);
-  for (const pl of p.palletLines) insPl.run(palletIds[pl.palletIdx], lineIds[pl.lineIdx], pl.qty);
+  const insPl = d.prepare(`INSERT INTO pallet_lines (pallet_id, order_line_id, qty, ref_no) VALUES (?, ?, ?, ?)`);
+  for (const pl of p.palletLines) insPl.run(palletIds[pl.palletIdx], lineIds[pl.lineIdx], pl.qty, pl.refNo ?? null);
 
   for (const poId of posIds) {
     d.prepare(
