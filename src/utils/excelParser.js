@@ -25,14 +25,50 @@ const cleanCode = v => {
 };
 
 /**
+ * Chuẩn hóa mã PO: nếu bắt đầu bằng PO (ví dụ PO2600168) thì chuẩn hóa.
+ */
+const cleanPoCode = v => {
+  const s = cleanCode(v);
+  const m = s.match(/^PO\s*[-:#]?\s*(\d+)$/i);
+  return m ? m[1] : s;
+};
+
+/**
+ * Trích xuất PO từ tên Sheet hoặc tên File khi trong các dòng dữ liệu không có mã PO.
+ */
+export function detectPoFromSheetOrFile(sheetName, filename) {
+  const cleanSheet = cleanStr(sheetName);
+  const mPo = cleanSheet.match(/^PO\s*[-:#]?\s*([A-Za-z0-9_-]+)$/i);
+  if (mPo) return mPo[1].trim();
+
+  if (cleanSheet && !/^sheet\s*\d*$/i.test(cleanSheet) && !/^trang\s*tính\s*\d*$/i.test(cleanSheet)) {
+    const mDigits = cleanSheet.match(/\b\d{6,}\b/);
+    if (mDigits) return mDigits[0];
+    return cleanSheet;
+  }
+
+  const baseFile = cleanStr(filename).replace(/\.[^/.]+$/, '').trim();
+  const mFilePo = baseFile.match(/^PO\s*[-:#]?\s*([A-Za-z0-9_-]+)$/i);
+  if (mFilePo) return mFilePo[1].trim();
+
+  if (baseFile && !/^media_\d+_[a-f0-9]+$/i.test(baseFile) && !/^import\b/i.test(baseFile) && !/^file\b/i.test(baseFile)) {
+    return baseFile;
+  }
+  return null;
+}
+
+/**
  * Phân tích các dòng dạng bảng (2D array) của biểu mẫu RE-CP4-16-S (Packing List).
  * @param {Array<Array<any>>} rows 
+ * @param {object|string} options Hoặc sheetName trực tiếp
  * @returns {Array<object>} Danh sách container tìm được
  */
-export function extractContainersFromRows(rows) {
+export function extractContainersFromRows(rows, options = {}) {
+  const { sheetName = '', filename = '' } = typeof options === 'string' ? { sheetName: options } : options;
+  const fallbackPo = detectPoFromSheetOrFile(sheetName, filename);
   const containers = [];
   let curContainer = null;
-  let lastDetectedPo = null;
+  let lastDetectedPo = fallbackPo;
   let lastDetectedCNo = null;
   let inData = false;
 
@@ -81,10 +117,10 @@ export function extractContainersFromRows(rows) {
     if (toIndex !== -1) {
       for (let j = toIndex + 1; j < row.length; j++) {
         const val = cleanCode(row[j]);
-        if (val && !val.includes('-') && /^\d+$/.test(val)) {
-          lastDetectedPo = val;
+        if (val && !val.includes('-') && /^(?:PO\s*[-:#]?\s*)?[0-9A-Za-z_]+$/i.test(val)) {
+          lastDetectedPo = cleanPoCode(val);
           if (curContainer && !curContainer.po_no) {
-            curContainer.po_no = val;
+            curContainer.po_no = lastDetectedPo;
           }
           break;
         }
@@ -182,7 +218,9 @@ export function extractContainersFromRows(rows) {
       const qtyVal = cleanNum(row[colIdx.qty]);
       const noVal = cleanNum(row[colIdx.no]);
       const poVal = cleanCode(row[colIdx.po]);
-      const rowPo = (poVal && /^\d+$/.test(poVal)) ? poVal : (curContainer.po_no || lastDetectedPo);
+      const rowPo = (poVal && /^(?:PO\s*[-:#]?\s*)?[0-9A-Za-z_-]+$/i.test(poVal) && !/^(?:package|no\.?|ntk|đóng gói)$/i.test(poVal))
+        ? cleanPoCode(poVal)
+        : (curContainer.po_no || lastDetectedPo);
 
       if (ntkVal && qtyVal > 0) {
         const refVal = cleanCode(row[colIdx.ref]);
@@ -285,7 +323,7 @@ export function parseExcelOrCsv(fileData, filename = 'import.xlsx') {
       if (!sheet) continue;
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
       if (rows && rows.length > 0) {
-        const found = extractContainersFromRows(rows);
+        const found = extractContainersFromRows(rows, { sheetName, filename });
         allContainers.push(...found);
       }
     }

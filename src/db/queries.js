@@ -1447,27 +1447,108 @@ export async function importPackingV1(batchId, jsonData) {
       posIds.push(row.id);
     }
 
-    // 2b. Kiểm tra xem các container trong file nạp lần này có container nào là MỚI đối với từng PO không
-    // (phục vụ việc cộng dồn thông số khi nạp thêm container mới cho cùng PO)
-    const existingContainers = await db.getAllAsync(
-      `SELECT container_no, po_id FROM containers WHERE order_batch_id = ?`,
-      [batchIdToUse]
-    );
-    const existingContainerSet = new Set(
-      existingContainers.map(c => `${c.po_id}\u0000${c.container_no}`)
-    );
-
+    // 2b. Phân giải Containers: Kiểm tra xem container là nạp lại (idempotent) hay là container mới/bổ sung
     const poHasNewContainer = new Set();
-    for (const c of plan.containers) {
+    const resolvedContainers = [];
+
+    for (let cIdx = 0; cIdx < plan.containers.length; cIdx++) {
+      const c = plan.containers[cIdx];
       const poId = posIds[c.poIdx];
       const poCode = plan.pos[c.poIdx].code;
-      const keyNormal = `${poId}\u0000${c.containerNo}`;
-      const keyAlt = `${poId}\u0000${c.containerNo} (${poCode})`;
-      const exists = existingContainerSet.has(keyNormal) || existingContainerSet.has(keyAlt);
-      if (!exists) {
+      const containerNo = c.containerNo;
+
+      // Đếm số kiện và tổng số lượng hàng trong container nạp lần này
+      const incomingPallets = plan.pallets.filter(p => p.containerIdx === cIdx);
+      const incomingPalletCount = incomingPallets.length;
+      const incomingPalletIndices = new Set(
+        plan.pallets
+          .map((p, idx) => ({ p, idx }))
+          .filter(x => x.p.containerIdx === cIdx)
+          .map(x => x.idx)
+      );
+      const incomingTotalQty = plan.palletLines
+        .filter(pl => incomingPalletIndices.has(pl.palletIdx))
+        .reduce((s, pl) => s + pl.qty, 0);
+
+      // Tra cứu container ứng viên trong batch hiện tại (khớp tên gốc hoặc tên kèm PO)
+      const existingCandidates = await db.getAllAsync(
+        `SELECT c.id, c.po_id, c.container_no, c.seal_no,
+                COUNT(DISTINCT p.id) AS pallets_count,
+                COALESCE(SUM(pl.qty), 0) AS total_qty
+         FROM containers c
+         LEFT JOIN pallets p ON p.container_id = c.id
+         LEFT JOIN pallet_lines pl ON pl.pallet_id = p.id
+         WHERE c.order_batch_id = ? AND (c.container_no = ? OR c.container_no = ?)
+         GROUP BY c.id`,
+        [batchIdToUse, containerNo, `${containerNo} (${poCode})`]
+      );
+
+      let matchedExisting = null;
+      for (const cand of existingCandidates) {
+        if (cand.po_id === poId) {
+          const isIso = /^[A-Z]{4}\d{7}$/.test(cand.container_no);
+          if (isIso) {
+            matchedExisting = cand;
+            break;
+          } else if (Number(cand.pallets_count) === incomingPalletCount && Number(cand.total_qty) === incomingTotalQty) {
+            matchedExisting = cand;
+            break;
+          }
+        }
+      }
+
+      if (matchedExisting) {
+        // Nạp lại chính container cũ (idempotent): cập nhật seal_no và làm sạch kiện cũ của container này
+        if (c.sealNo && c.sealNo !== matchedExisting.seal_no) {
+          await db.runAsync(`UPDATE containers SET seal_no = ? WHERE id = ?`, [c.sealNo, matchedExisting.id]);
+        }
+        await db.runAsync(`DELETE FROM pallets WHERE container_id = ?`, [matchedExisting.id]);
+        resolvedContainers.push({
+          cIdx,
+          cId: matchedExisting.id,
+          containerNo: matchedExisting.container_no,
+          isNew: false,
+        });
+      } else {
+        // Container mới hoặc container khác nạp bổ sung vào đơn hàng:
+        // Đặt tên container duy nhất, tránh va chạm tên với các container khác đã có trong batch
         poHasNewContainer.add(c.poIdx);
+        let finalNo = containerNo;
+        let dup = await db.getFirstAsync(
+          `SELECT id FROM containers WHERE order_batch_id = ? AND container_no = ?`,
+          [batchIdToUse, finalNo]
+        );
+        if (dup) {
+          finalNo = `${containerNo} (${poCode})`;
+          dup = await db.getFirstAsync(
+            `SELECT id FROM containers WHERE order_batch_id = ? AND container_no = ?`,
+            [batchIdToUse, finalNo]
+          );
+          let suffix = 2;
+          while (dup) {
+            finalNo = `${containerNo} (${poCode}) #${suffix}`;
+            dup = await db.getFirstAsync(
+              `SELECT id FROM containers WHERE order_batch_id = ? AND container_no = ?`,
+              [batchIdToUse, finalNo]
+            );
+            suffix++;
+          }
+        }
+
+        const r = await db.runAsync(
+          `INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`,
+          [batchIdToUse, poId, finalNo, c.sealNo]
+        );
+        resolvedContainers.push({
+          cIdx,
+          cId: r.lastInsertRowId,
+          containerNo: finalNo,
+          isNew: true,
+        });
       }
     }
+
+    const containerIds = resolvedContainers.map(r => r.cId);
 
     // 3. Nối thêm hoặc cập nhật dòng mã hàng (order_lines) — giữ nguyên id và nhật ký sản xuất
     const lineIds = [];
@@ -1523,55 +1604,6 @@ export async function importPackingV1(batchId, jsonData) {
            END`,
         [lineIds[lineIdx], lr.refNo, lr.target, isNew]
       );
-    }
-
-    // 6. Containers: Thêm mới hoặc làm mới kiện của chính container đó khi nạp lại
-    const containerIds = [];
-    for (const c of plan.containers) {
-      const poId = posIds[c.poIdx];
-      const poCode = plan.pos[c.poIdx].code;
-      let containerNo = c.containerNo;
-
-      const existing = await db.getFirstAsync(
-        `SELECT id, po_id FROM containers WHERE order_batch_id = ? AND container_no = ?`,
-        [batchIdToUse, containerNo]
-      );
-
-      let cId;
-      if (existing) {
-        if (existing.po_id === poId) {
-          // Cùng PO (nạp lại đơn cũ): cập nhật seal_no và làm sạch kiện cũ của container này
-          if (c.sealNo) {
-            await db.runAsync(`UPDATE containers SET seal_no = ? WHERE id = ?`, [c.sealNo, existing.id]);
-          }
-          cId = existing.id;
-          await db.runAsync(`DELETE FROM pallets WHERE container_id = ?`, [cId]);
-        } else {
-          // Khác PO nhưng trùng tên container (ví dụ nhiều đơn đều dùng nhãn generic "Container 1")
-          containerNo = `${containerNo} (${poCode})`;
-          const existingAlt = await db.getFirstAsync(
-            `SELECT id FROM containers WHERE order_batch_id = ? AND container_no = ?`,
-            [batchIdToUse, containerNo]
-          );
-          if (existingAlt) {
-            cId = existingAlt.id;
-            await db.runAsync(`DELETE FROM pallets WHERE container_id = ?`, [cId]);
-          } else {
-            const r = await db.runAsync(
-              `INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`,
-              [batchIdToUse, poId, containerNo, c.sealNo]
-            );
-            cId = r.lastInsertRowId;
-          }
-        }
-      } else {
-        const r = await db.runAsync(
-          `INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`,
-          [batchIdToUse, poId, containerNo, c.sealNo]
-        );
-        cId = r.lastInsertRowId;
-      }
-      containerIds.push(cId);
     }
 
     // 7. Kiện hàng (pallets) và dòng hàng trong kiện (pallet_lines)

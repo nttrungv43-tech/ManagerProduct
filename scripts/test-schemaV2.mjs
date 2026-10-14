@@ -69,24 +69,98 @@ function applyPlan(d, p, importedAt = '2026-10-04', existingBatchId = null) {
     posIds.push(row.id);
   }
 
-  const existingContainers = d.prepare(
-    `SELECT container_no, po_id FROM containers WHERE order_batch_id = ?`
-  ).all(batchId);
-  const existingContainerSet = new Set(
-    existingContainers.map(c => `${c.po_id}\u0000${c.container_no}`)
-  );
-
+  // 2b. Phân giải Containers: Kiểm tra xem container là nạp lại (idempotent) hay là container mới/bổ sung
   const poHasNewContainer = new Set();
-  for (const c of p.containers) {
+  const resolvedContainers = [];
+
+  for (let cIdx = 0; cIdx < p.containers.length; cIdx++) {
+    const c = p.containers[cIdx];
     const poId = posIds[c.poIdx];
     const poCode = p.pos[c.poIdx].code;
-    const keyNormal = `${poId}\u0000${c.containerNo}`;
-    const keyAlt = `${poId}\u0000${c.containerNo} (${poCode})`;
-    const exists = existingContainerSet.has(keyNormal) || existingContainerSet.has(keyAlt);
-    if (!exists) {
+    const containerNo = c.containerNo;
+
+    const incomingPallets = p.pallets.filter(pal => pal.containerIdx === cIdx);
+    const incomingPalletCount = incomingPallets.length;
+    const incomingPalletIndices = new Set(
+      p.pallets
+        .map((pal, idx) => ({ pal, idx }))
+        .filter(x => x.pal.containerIdx === cIdx)
+        .map(x => x.idx)
+    );
+    const incomingTotalQty = p.palletLines
+      .filter(pl => incomingPalletIndices.has(pl.palletIdx))
+      .reduce((s, pl) => s + pl.qty, 0);
+
+    const existingCandidates = d.prepare(
+      `SELECT c.id, c.po_id, c.container_no, c.seal_no,
+              COUNT(DISTINCT pal.id) AS pallets_count,
+              COALESCE(SUM(pl.qty), 0) AS total_qty
+       FROM containers c
+       LEFT JOIN pallets pal ON pal.container_id = c.id
+       LEFT JOIN pallet_lines pl ON pl.pallet_id = pal.id
+       WHERE c.order_batch_id = ? AND (c.container_no = ? OR c.container_no = ?)
+       GROUP BY c.id`
+    ).all(batchId, containerNo, `${containerNo} (${poCode})`);
+
+    let matchedExisting = null;
+    for (const cand of existingCandidates) {
+      if (cand.po_id === poId) {
+        const isIso = /^[A-Z]{4}\d{7}$/.test(cand.container_no);
+        if (isIso) {
+          matchedExisting = cand;
+          break;
+        } else if (Number(cand.pallets_count) === incomingPalletCount && Number(cand.total_qty) === incomingTotalQty) {
+          matchedExisting = cand;
+          break;
+        }
+      }
+    }
+
+    if (matchedExisting) {
+      if (c.sealNo && c.sealNo !== matchedExisting.seal_no) {
+        d.prepare(`UPDATE containers SET seal_no = ? WHERE id = ?`).run(c.sealNo, matchedExisting.id);
+      }
+      d.prepare(`DELETE FROM pallets WHERE container_id = ?`).run(matchedExisting.id);
+      resolvedContainers.push({
+        cIdx,
+        cId: matchedExisting.id,
+        containerNo: matchedExisting.container_no,
+        isNew: false,
+      });
+    } else {
       poHasNewContainer.add(c.poIdx);
+      let finalNo = containerNo;
+      let dup = d.prepare(
+        `SELECT id FROM containers WHERE order_batch_id = ? AND container_no = ?`
+      ).get(batchId, finalNo);
+      if (dup) {
+        finalNo = `${containerNo} (${poCode})`;
+        dup = d.prepare(
+          `SELECT id FROM containers WHERE order_batch_id = ? AND container_no = ?`
+        ).get(batchId, finalNo);
+        let suffix = 2;
+        while (dup) {
+          finalNo = `${containerNo} (${poCode}) #${suffix}`;
+          dup = d.prepare(
+            `SELECT id FROM containers WHERE order_batch_id = ? AND container_no = ?`
+          ).get(batchId, finalNo);
+          suffix++;
+        }
+      }
+
+      const r = d.prepare(
+        `INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`
+      ).run(batchId, poId, finalNo, c.sealNo);
+      resolvedContainers.push({
+        cIdx,
+        cId: Number(r.lastInsertRowid),
+        containerNo: finalNo,
+        isNew: true,
+      });
     }
   }
+
+  const containerIds = resolvedContainers.map(r => r.cId);
 
   const insLine = d.prepare(
     `INSERT INTO order_lines (po_id, item_code, target, nw_kg, gw_kg, volume_cbm, package_count)
@@ -130,48 +204,6 @@ function applyPlan(d, p, importedAt = '2026-10-04', existingBatchId = null) {
     if (li < 0) continue;
     const isNew = poHasNewContainer.has(lr.poIdx) ? 1 : 0;
     insLineRef.run(lineIds[li], lr.refNo, lr.target, isNew);
-  }
-
-  const containerIds = [];
-  for (const c of p.containers) {
-    const poId = posIds[c.poIdx];
-    const poCode = p.pos[c.poIdx].code;
-    let containerNo = c.containerNo;
-
-    const existing = d.prepare(
-      `SELECT id, po_id FROM containers WHERE order_batch_id = ? AND container_no = ?`
-    ).get(batchId, containerNo);
-
-    let cId;
-    if (existing) {
-      if (existing.po_id === poId) {
-        if (c.sealNo) {
-          d.prepare(`UPDATE containers SET seal_no = ? WHERE id = ?`).run(c.sealNo, existing.id);
-        }
-        cId = existing.id;
-        d.prepare(`DELETE FROM pallets WHERE container_id = ?`).run(cId);
-      } else {
-        containerNo = `${containerNo} (${poCode})`;
-        const existingAlt = d.prepare(
-          `SELECT id FROM containers WHERE order_batch_id = ? AND container_no = ?`
-        ).get(batchId, containerNo);
-        if (existingAlt) {
-          cId = existingAlt.id;
-          d.prepare(`DELETE FROM pallets WHERE container_id = ?`).run(cId);
-        } else {
-          const r = d.prepare(
-            `INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`
-          ).run(batchId, poId, containerNo, c.sealNo);
-          cId = Number(r.lastInsertRowid);
-        }
-      }
-    } else {
-      const r = d.prepare(
-        `INSERT INTO containers (order_batch_id, po_id, container_no, seal_no) VALUES (?, ?, ?, ?)`
-      ).run(batchId, poId, containerNo, c.sealNo);
-      cId = Number(r.lastInsertRowid);
-    }
-    containerIds.push(cId);
   }
 
   const insPal = d.prepare(
