@@ -118,6 +118,10 @@ export default function ItemCard({
   const [editDefectQty, setEditDefectQty] = useState('');
   const [editDefectBoxQty, setEditDefectBoxQty] = useState('');
   const [editDefectTypes, setEditDefectTypes] = useState({ yellow: false, red: false, tear: false });
+  const [isUnlabeled, setIsUnlabeled] = useState(false);
+  const [unlabeledQtyInput, setUnlabeledQtyInput] = useState('');
+  const [editIsUnlabeled, setEditIsUnlabeled] = useState(false);
+  const [editUnlabeledQty, setEditUnlabeledQty] = useState('');
 
   const produced = item.produced || 0;
   const remaining = Math.max(item.target - produced, 0);
@@ -179,6 +183,10 @@ export default function ItemCard({
   function setRefDefectTypesFor(refNo, types) {
     setRefDefectTypes(prev => ({ ...prev, [`${REF_KEY_PREFIX}${refNo}`]: types }));
   }
+  const [refUnlabeled, setRefUnlabeled] = useState({});
+  function setRefUnlabeledFor(refNo, value) {
+    setRefUnlabeled(prev => ({ ...prev, [`${REF_KEY_PREFIX}${refNo}`]: value }));
+  }
 
   /**
    * Kiểm tra client-side trước khi gửi: số lượng nhập có vượt kế hoạch không.
@@ -221,6 +229,7 @@ export default function ItemCard({
     try {
       const types = Object.keys(refDefectTypes[key] || {}).filter(k => refDefectTypes[key][k]);
       const lineVal = refLine[key] || 'auto';
+      const isUnlab = Boolean(refUnlabeled[key]);
       const res = await onAddEntry(item.order_line_id, {
         date: selectedDate || todayLocal(),
         qty: q,
@@ -229,6 +238,8 @@ export default function ItemCard({
         defectBoxQty: dbq,
         defectTypes: (dq > 0 || dbq > 0) ? types : [],
         refNo,
+        isLabeled: isUnlab ? 0 : 1,
+        unlabeledQty: isUnlab ? q : 0,
       });
       if (res && res.ok === false) {
         const refMsg = formatRefOverLimit(res.error);
@@ -243,6 +254,7 @@ export default function ItemCard({
       setRefDefectQtyFor(refNo, '');
       setRefDefectBoxQtyFor(refNo, '');
       setRefDefectTypesFor(refNo, { yellow: false, red: false, tear: false });
+      setRefUnlabeledFor(refNo, false);
       Keyboard.dismiss();
 
       const now = new Date();
@@ -290,6 +302,8 @@ export default function ItemCard({
         defectQty: dq,
         defectBoxQty: dbq,
         defectTypes: (dq > 0 || dbq > 0) ? types : [],
+        isLabeled: isUnlabeled ? 0 : 1,
+        unlabeledQty: isUnlabeled ? (unlabeledQtyInput ? parseQty(unlabeledQtyInput) : q) : 0,
       });
       // Vượt đơn đặt hàng: giữ nguyên ô nhập để người dùng sửa lại.
       if (res && res.ok === false) { showOverTarget(res.error); return; }
@@ -298,6 +312,8 @@ export default function ItemCard({
       setDefectQty('');
       setDefectBoxQty('');
       setDefectTypes({ yellow: false, red: false, tear: false });
+      setIsUnlabeled(false);
+      setUnlabeledQtyInput('');
       qtyInputRef.current?.blur();
       defectQtyInputRef.current?.blur();
       Keyboard.dismiss();
@@ -334,6 +350,9 @@ export default function ItemCard({
     setEditLine(entry.line || 'auto');
     setEditDefectQty(String(entry.defect_qty || ''));
     setEditDefectBoxQty(String(entry.defect_box_qty || ''));
+    const isUnlab = entry.is_labeled === 0 || (entry.unlabeled_qty && entry.unlabeled_qty > 0);
+    setEditIsUnlabeled(Boolean(isUnlab));
+    setEditUnlabeledQty(String(entry.unlabeled_qty || (isUnlab ? entry.qty : '')));
     const types = { yellow: false, red: false, tear: false };
     (entry.defect_types || '').split(',').filter(Boolean).forEach(t => {
       if (types.hasOwnProperty(t)) types[t] = true;
@@ -348,6 +367,8 @@ export default function ItemCard({
     setEditDefectQty('');
     setEditDefectBoxQty('');
     setEditDefectTypes({ yellow: false, red: false, tear: false });
+    setEditIsUnlabeled(false);
+    setEditUnlabeledQty('');
   }
 
   async function handleEditSave() {
@@ -371,6 +392,8 @@ export default function ItemCard({
       defectQty: dq,
       defectBoxQty: dbq,
       defectTypes: (dq > 0 || dbq > 0) ? types : [],
+      isLabeled: editIsUnlabeled ? 0 : 1,
+      unlabeledQty: editIsUnlabeled ? (editUnlabeledQty ? parseQty(editUnlabeledQty) : q) : 0,
     };
     Alert.alert('Xác nhận', 'Lưu thay đổi cho nhật ký này?', [
       { text: 'Huỷ', style: 'cancel' },
@@ -482,6 +505,14 @@ export default function ItemCard({
         <Text style={styles.numValueBad(theme)}>{(item.defect || 0).toLocaleString('vi-VN')}</Text>
         <Text style={styles.numLabel(theme)}>Thùng lỗi:</Text>
         <Text style={styles.numValueBad(theme)}>{(item.defect_box || 0).toLocaleString('vi-VN')}</Text>
+        {item.unlabeled > 0 && (
+          <>
+            <Text style={[styles.numLabel(theme), { color: theme.warn }]}>Chờ dán:</Text>
+            <Text style={[styles.numValue(theme), { color: theme.warn, fontWeight: '700' }]}>
+              {item.unlabeled.toLocaleString('vi-VN')}
+            </Text>
+          </>
+        )}
       </View>
 
       {/* FEAT-17 (AC-NEW-05/06): 4 trường từ packing list. FEAT-22: chỉ còn `Kiện` — `KL`/`TKL`/
@@ -690,6 +721,49 @@ export default function ItemCard({
                     );
                   })}
                 </View>
+              </View>
+
+              {/* Tuỳ chọn: Chưa dán nhãn */}
+              <View style={{ marginBottom: 12 }}>
+                <TouchableOpacity
+                  style={[
+                    styles.unlabeledToggle,
+                    {
+                      borderColor: isUnlabeled ? theme.warn : theme.line,
+                      backgroundColor: isUnlabeled ? theme.warn + '18' : theme.bg,
+                    },
+                  ]}
+                  onPress={() => setIsUnlabeled(!isUnlabeled)}
+                  disabled={isSubmitting}
+                >
+                  <Ionicons
+                    name={isUnlabeled ? 'pricetag' : 'pricetag-outline'}
+                    size={15}
+                    color={isUnlabeled ? theme.warn : theme.sub}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text style={{ color: isUnlabeled ? theme.warn : theme.sub, fontSize: 12.5, fontWeight: isUnlabeled ? '700' : '600' }}>
+                    {isUnlabeled ? '🏷 Chưa dán nhãn hoàn chỉnh' : 'Dán nhãn: Đã dán hoàn chỉnh (mặc định)'}
+                  </Text>
+                </TouchableOpacity>
+
+                {isUnlabeled && (
+                  <View style={{ marginTop: 6, flexDirection: 'row', alignItems: 'center' }}>
+                    <Text style={{ fontSize: 11.5, color: theme.sub, marginRight: 8, fontWeight: '600' }}>SL chưa dán:</Text>
+                    <TextInput
+                      style={[
+                        styles.input(theme),
+                        { flex: 1, height: 38, paddingVertical: 0 },
+                      ]}
+                      keyboardType="numeric"
+                      placeholder={`Mặc định = tất cả ${qty || 'SL'}`}
+                      placeholderTextColor={theme.sub}
+                      value={unlabeledQtyInput}
+                      onChangeText={setUnlabeledQtyInput}
+                      editable={!isSubmitting}
+                    />
+                  </View>
+                )}
               </View>
 
               {/* Nút thêm lượt sản xuất */}
@@ -1000,6 +1074,37 @@ export default function ItemCard({
                         );
                       })}
                     </View>
+
+                    {/* Dòng 4: Tuỳ chọn Chưa dán nhãn */}
+                    <View style={{ marginTop: 8 }}>
+                      <TouchableOpacity
+                        disabled={isRefBusy}
+                        style={[
+                          styles.refUnlabeledChip,
+                          {
+                            borderColor: refUnlabeled[key] ? theme.warn : theme.line,
+                            backgroundColor: refUnlabeled[key] ? theme.warn + '18' : theme.card,
+                          },
+                        ]}
+                        onPress={() => setRefUnlabeledFor(entry.ref_no, !refUnlabeled[key])}
+                      >
+                        <Ionicons
+                          name={refUnlabeled[key] ? 'pricetag' : 'pricetag-outline'}
+                          size={12}
+                          color={refUnlabeled[key] ? theme.warn : theme.sub}
+                          style={{ marginRight: 4 }}
+                        />
+                        <Text
+                          style={{
+                            color: refUnlabeled[key] ? theme.warn : theme.sub,
+                            fontSize: 11,
+                            fontWeight: refUnlabeled[key] ? '700' : '500',
+                          }}
+                        >
+                          {refUnlabeled[key] ? '🏷 Chưa dán nhãn hoàn chỉnh' : 'Dán nhãn: Đã dán hoàn chỉnh (mặc định)'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 );
               })}
@@ -1125,6 +1230,48 @@ export default function ItemCard({
                             );
                           })}
                         </View>
+
+                        {/* Tuỳ chọn Chưa dán nhãn khi sửa */}
+                        <View style={{ marginTop: 10 }}>
+                          <TouchableOpacity
+                            style={[
+                              styles.unlabeledToggle,
+                              {
+                                borderColor: editIsUnlabeled ? theme.warn : theme.line,
+                                backgroundColor: editIsUnlabeled ? theme.warn + '18' : theme.bg,
+                              },
+                            ]}
+                            onPress={() => setEditIsUnlabeled(!editIsUnlabeled)}
+                          >
+                            <Ionicons
+                              name={editIsUnlabeled ? 'pricetag' : 'pricetag-outline'}
+                              size={15}
+                              color={editIsUnlabeled ? theme.warn : theme.sub}
+                              style={{ marginRight: 6 }}
+                            />
+                            <Text style={{ color: editIsUnlabeled ? theme.warn : theme.sub, fontSize: 12.5, fontWeight: editIsUnlabeled ? '700' : '600' }}>
+                              {editIsUnlabeled ? '🏷 Chưa dán nhãn hoàn chỉnh' : 'Dán nhãn: Đã dán hoàn chỉnh (mặc định)'}
+                            </Text>
+                          </TouchableOpacity>
+
+                          {editIsUnlabeled && (
+                            <View style={{ marginTop: 6, flexDirection: 'row', alignItems: 'center' }}>
+                              <Text style={{ fontSize: 11.5, color: theme.sub, marginRight: 8, fontWeight: '600' }}>SL chưa dán:</Text>
+                              <TextInput
+                                style={[
+                                  styles.input(theme),
+                                  { flex: 1, height: 38, paddingVertical: 0 },
+                                ]}
+                                keyboardType="numeric"
+                                placeholder={`Mặc định = tất cả ${editQty || 'SL'}`}
+                                placeholderTextColor={theme.sub}
+                                value={editUnlabeledQty}
+                                onChangeText={setEditUnlabeledQty}
+                              />
+                            </View>
+                          )}
+                        </View>
+
                         <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
                           <TouchableOpacity style={[styles.addBtn, { backgroundColor: theme.good }]} onPress={handleEditSave}>
                             <Text style={{ color: '#fff', fontWeight: '700' }}>Lưu</Text>
@@ -1468,5 +1615,22 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     marginTop: 6,
     marginBottom: 8,
+  },
+  unlabeledToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  refUnlabeledChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    borderWidth: 1,
+    alignSelf: 'flex-start',
   },
 });

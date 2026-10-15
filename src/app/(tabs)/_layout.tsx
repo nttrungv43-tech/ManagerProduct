@@ -1,18 +1,19 @@
-// src/app/(tabs)/_layout.tsx
 import React from 'react';
 import { useColorScheme } from 'react-native';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getTheme } from '@/theme';
+import { useAppStore } from '@/store/useAppStore';
 
 export default function TabsLayout() {
   const theme = getTheme(useColorScheme());
   const insets = useSafeAreaInsets();
+  const unlabeledCount = useAppStore(s => s.unlabeledCount);
 
   // Đảm bảo khoảng đệm an toàn đáy trên Android và iOS.
   // Khi Android bật 3 phím điều hướng hệ thống (Back, Home, Recent), insets.bottom sẽ là ~48dp.
-  // Bù chính xác chiều cao này để các phím Android không đè lên 3 tab Mã hàng / Container / Lịch sử.
+  // Bù chính xác chiều cao này để các phím Android không đè lên các tab điều hướng.
   const bottomPadding = Math.max(insets.bottom, 8);
   const tabBarHeight = 56 + bottomPadding;
 
@@ -50,6 +51,22 @@ export default function TabsLayout() {
           title: 'Mã hàng',
           tabBarIcon: ({ focused, color }) => (
             <Ionicons name={focused ? 'layers' : 'layers-outline'} size={22} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="labeling"
+        options={{
+          title: 'Dán nhãn',
+          tabBarBadge: unlabeledCount > 0 ? (unlabeledCount > 99 ? '99+' : unlabeledCount) : undefined,
+          tabBarBadgeStyle: {
+            backgroundColor: theme.warn,
+            color: '#fff',
+            fontSize: 10,
+            fontWeight: '700',
+          },
+          tabBarIcon: ({ focused, color }) => (
+            <Ionicons name={focused ? 'pricetag' : 'pricetag-outline'} size={22} color={color} />
           ),
         }}
       />

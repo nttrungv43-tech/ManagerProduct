@@ -34,6 +34,15 @@ export default function EntryLogRow({ entry, po, onEdit, onDelete, theme }) {
             <DefectBadgeList types={defectTypes} theme={theme} size="sm" />
           </View>
         )}
+        {(entry.is_labeled === 0 || (entry.unlabeled_qty && entry.unlabeled_qty > 0)) && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
+            <View style={{ backgroundColor: theme.warn + '20', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4, borderWidth: 1, borderColor: theme.warn }}>
+              <Text style={{ color: theme.warn, fontSize: 10.5, fontWeight: '700' }}>
+                🏷 Chưa dán: {(entry.unlabeled_qty || entry.qty).toLocaleString('vi-VN')} pcs
+              </Text>
+            </View>
+          </View>
+        )}
       </View>
       <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
         <TouchableOpacity onPress={onEdit}><Text style={{ color: theme.accent, fontSize: 12 }}>Sửa</Text></TouchableOpacity>

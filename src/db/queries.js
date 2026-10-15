@@ -207,6 +207,7 @@ export async function fetchEntriesForLine(orderLineId) {
   // FEAT-23: cột `ref_no` = số hiệu đã gắn. `NULL` = nhật ký chưa gắn số hiệu (không bịa ref — AC-RF-07).
   return db.getAllAsync(
     `SELECT pe.id, pe.date, pe.qty, pe.line, pe.defect_qty, pe.defect_box_qty, pe.order_line_id,
+            pe.is_labeled, pe.unlabeled_qty,
             GROUP_CONCAT(pd.type) AS defect_types,
             (SELECT er.ref_no FROM production_entry_refs er WHERE er.entry_id = pe.id) AS ref_no
      FROM production_entries pe
@@ -304,7 +305,17 @@ async function checkRefTarget(db, orderLineId, refNo, qty, excludeEntryId = null
 }
 
 /** Thêm một mục nhật ký sản xuất vào một thẻ (dòng đơn hàng). */
-export async function addEntry(orderLineId, { date, qty, line, defectQty, defectBoxQty, defectTypes, refNo = null }) {
+export async function addEntry(orderLineId, {
+  date,
+  qty,
+  line,
+  defectQty,
+  defectBoxQty,
+  defectTypes,
+  refNo = null,
+  isLabeled = undefined,
+  unlabeledQty = undefined,
+}) {
   const db = await getDb();
   const q = parseQty(qty);
   if (q === null || q <= 0) return fail('INVALID_QTY', { ntk: '' });
@@ -315,6 +326,23 @@ export async function addEntry(orderLineId, { date, qty, line, defectQty, defect
   const defect = Math.max(parseQty(defectQty) ?? 0, 0);
   const defectBox = Math.max(parseQty(defectBoxQty) ?? 0, 0);
 
+  // FEAT-28: Tính toán trạng thái dán nhãn
+  let nextIsLabeled = 1;
+  let nextUnlabeledQty = 0;
+  if (isLabeled === 0 || isLabeled === false) {
+    const uq = unlabeledQty !== undefined && unlabeledQty !== null && String(unlabeledQty).trim() !== ''
+      ? parseQty(unlabeledQty)
+      : q;
+    nextUnlabeledQty = Math.min(Math.max(uq ?? q, 0), q);
+    nextIsLabeled = nextUnlabeledQty > 0 ? 0 : 1;
+  } else if (unlabeledQty !== undefined && unlabeledQty !== null && String(unlabeledQty).trim() !== '') {
+    const uq = parseQty(unlabeledQty);
+    if (uq !== null && uq > 0) {
+      nextUnlabeledQty = Math.min(uq, q);
+      nextIsLabeled = 0;
+    }
+  }
+
   const ok = await checkLineTarget(db, orderLineId, q);
   if (!ok.ok) return fail(ok.code, ok);
   // FEAT-23: hạn mức theo số hiệu, kiểm sau hạn mức tổng để lỗi nào cũng không ghi DB.
@@ -323,9 +351,9 @@ export async function addEntry(orderLineId, { date, qty, line, defectQty, defect
 
   return withTransaction(db, async () => {
     const res = await db.runAsync(
-      `INSERT INTO production_entries (order_line_id, date, qty, line, defect_qty, defect_box_qty)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [orderLineId, d, q, lineKind, defect, defectBox]
+      `INSERT INTO production_entries (order_line_id, date, qty, line, defect_qty, defect_box_qty, is_labeled, unlabeled_qty)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [orderLineId, d, q, lineKind, defect, defectBox, nextIsLabeled, nextUnlabeledQty]
     );
     await writeDefects(db, res.lastInsertRowId, defect, defectTypes, defectBox);
     await writeEntryRef(db, res.lastInsertRowId, orderLineId, refNo);
@@ -344,10 +372,20 @@ async function writeEntryRef(db, entryId, orderLineId, refNo) {
 }
 
 /** Sửa một mục nhật ký. */
-export async function updateEntry(entryId, { date, qty, line, defectQty, defectBoxQty, defectTypes, refNo = undefined }) {
+export async function updateEntry(entryId, {
+  date,
+  qty,
+  line,
+  defectQty,
+  defectBoxQty,
+  defectTypes,
+  refNo = undefined,
+  isLabeled = undefined,
+  unlabeledQty = undefined,
+}) {
   const db = await getDb();
   const cur = await db.getFirstAsync(
-    `SELECT order_line_id, line FROM production_entries WHERE id = ?`, [entryId]
+    `SELECT order_line_id, line, is_labeled, unlabeled_qty FROM production_entries WHERE id = ?`, [entryId]
   );
   if (!cur) return fail('ENTRY_NOT_FOUND');
 
@@ -359,8 +397,8 @@ export async function updateEntry(entryId, { date, qty, line, defectQty, defectB
   const ok = await checkLineTarget(db, cur.order_line_id, q, entryId);
   if (!ok.ok) return fail(ok.code, ok);
 
-  // FEAT-23: `refNo === undefined` ⇒ giữ nguyên ref đang gắn (form sửa không nhắc tới ref vẫn chạy
-  // đúng như cũ). `null`/rỗng ⇒ **bỏ** gắn ref. Chuỗi ⇒ đổi sang ref đó.
+  // FEAT-23: refNo === undefined ⇒ giữ nguyên ref đang gắn (form sửa không nhắc tới ref vẫn chạy
+  // đúng như cũ). null/rỗng ⇒ bỏ gắn ref. Chuỗi ⇒ đổi sang ref đó.
   let nextRef = refNo;
   if (nextRef === undefined) {
     const cur2 = await db.getFirstAsync(
@@ -375,10 +413,36 @@ export async function updateEntry(entryId, { date, qty, line, defectQty, defectB
   const defect = Math.max(parseQty(defectQty) ?? 0, 0);
   const defectBox = Math.max(parseQty(defectBoxQty) ?? 0, 0);
 
+  // FEAT-28: Cập nhật trạng thái dán nhãn
+  let nextIsLabeled;
+  let nextUnlabeledQty;
+  if (isLabeled === undefined && unlabeledQty === undefined) {
+    nextUnlabeledQty = Math.min(num(cur.unlabeled_qty), q);
+    nextIsLabeled = nextUnlabeledQty > 0 ? 0 : 1;
+  } else if (isLabeled === 0 || isLabeled === false) {
+    const uq = unlabeledQty !== undefined && unlabeledQty !== null && String(unlabeledQty).trim() !== ''
+      ? parseQty(unlabeledQty)
+      : q;
+    nextUnlabeledQty = Math.min(Math.max(uq ?? q, 0), q);
+    nextIsLabeled = nextUnlabeledQty > 0 ? 0 : 1;
+  } else if (unlabeledQty !== undefined && unlabeledQty !== null && String(unlabeledQty).trim() !== '') {
+    const uq = parseQty(unlabeledQty);
+    if (uq !== null && uq > 0) {
+      nextUnlabeledQty = Math.min(uq, q);
+      nextIsLabeled = 0;
+    } else {
+      nextIsLabeled = 1;
+      nextUnlabeledQty = 0;
+    }
+  } else {
+    nextIsLabeled = 1;
+    nextUnlabeledQty = 0;
+  }
+
   return withTransaction(db, async () => {
     await db.runAsync(
-      `UPDATE production_entries SET date = ?, qty = ?, line = ?, defect_qty = ?, defect_box_qty = ? WHERE id = ?`,
-      [d, q, lineKind, defect, defectBox, entryId]
+      `UPDATE production_entries SET date = ?, qty = ?, line = ?, defect_qty = ?, defect_box_qty = ?, is_labeled = ?, unlabeled_qty = ? WHERE id = ?`,
+      [d, q, lineKind, defect, defectBox, nextIsLabeled, nextUnlabeledQty, entryId]
     );
     await db.runAsync(`DELETE FROM production_defects WHERE entry_id = ?`, [entryId]);
     await writeDefects(db, entryId, defect, defectTypes, defectBox);
@@ -417,6 +481,112 @@ async function writeDefects(db, entryId, defectQty, defectTypes, defectBoxQty = 
       `INSERT OR IGNORE INTO production_defects (entry_id, type) VALUES (?, ?)`, [entryId, t]
     );
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// DÁN NHÃN SẢN PHẨM (FEAT-28) — Workspace Checker
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Lấy danh sách các lượt sản xuất đang chờ dán nhãn (unlabeled_qty > 0)
+ * theo đơn hàng hiện tại (active batch) hoặc batchId truyền vào.
+ */
+export async function fetchUnlabeledEntries(batchId) {
+  const db = await getDb();
+  const id = batchId ?? (await getActiveBatchId(db));
+  if (!id) return [];
+  const rows = await db.getAllAsync(
+    `SELECT pe.id,
+            pe.date,
+            pe.qty,
+            pe.unlabeled_qty,
+            pe.is_labeled,
+            pe.line,
+            pe.order_line_id,
+            ol.item_code AS ntk,
+            p.code AS po,
+            (SELECT er.ref_no FROM production_entry_refs er WHERE er.entry_id = pe.id) AS ref_no
+     FROM production_entries pe
+     JOIN order_lines ol ON ol.id = pe.order_line_id
+     JOIN pos p ON p.id = ol.po_id
+     WHERE pe.unlabeled_qty > 0
+       AND p.order_batch_id = ?
+     ORDER BY pe.date DESC, pe.id DESC`,
+    [id]
+  );
+  return rows.map(r => ({
+    id: r.id,
+    date: r.date,
+    qty: num(r.qty),
+    unlabeled_qty: num(r.unlabeled_qty),
+    is_labeled: num(r.is_labeled),
+    line: r.line,
+    orderLineId: r.order_line_id,
+    ntk: r.ntk,
+    po: r.po,
+    refNo: r.ref_no || null,
+  }));
+}
+
+/**
+ * Lấy tổng hợp KPI chờ dán nhãn: số lượt và tổng pcs.
+ */
+export async function fetchUnlabeledSummary(batchId) {
+  const db = await getDb();
+  const id = batchId ?? (await getActiveBatchId(db));
+  if (!id) return { count: 0, totalPcs: 0 };
+  const row = await db.getFirstAsync(
+    `SELECT COUNT(*) AS total_entries,
+            COALESCE(SUM(pe.unlabeled_qty), 0) AS total_unlabeled_qty
+     FROM production_entries pe
+     JOIN order_lines ol ON ol.id = pe.order_line_id
+     JOIN pos p ON p.id = ol.po_id
+     WHERE pe.unlabeled_qty > 0
+       AND p.order_batch_id = ?`,
+    [id]
+  );
+  return {
+    count: num(row?.total_entries),
+    totalPcs: num(row?.total_unlabeled_qty),
+  };
+}
+
+/**
+ * 1-chạm xác nhận đã hoàn tất dán nhãn toàn bộ lô sản xuất.
+ */
+export async function markEntryFullyLabeled(entryId) {
+  const db = await getDb();
+  const cur = await db.getFirstAsync(`SELECT id FROM production_entries WHERE id = ?`, [entryId]);
+  if (!cur) return fail('ENTRY_NOT_FOUND');
+  await db.runAsync(
+    `UPDATE production_entries SET is_labeled = 1, unlabeled_qty = 0 WHERE id = ?`,
+    [entryId]
+  );
+  return done({ id: entryId, is_labeled: 1, unlabeled_qty: 0 });
+}
+
+/**
+ * Dán nhãn một phần: trừ lùi labeledQty vào unlabeled_qty.
+ * Nếu dán đủ hoặc dư => chuyển is_labeled = 1, unlabeled_qty = 0.
+ */
+export async function updateEntryLabeledQty(entryId, labeledQty) {
+  const db = await getDb();
+  const cur = await db.getFirstAsync(
+    `SELECT id, qty, unlabeled_qty FROM production_entries WHERE id = ?`, [entryId]
+  );
+  if (!cur) return fail('ENTRY_NOT_FOUND');
+  const lq = parseQty(labeledQty);
+  if (lq === null || lq <= 0) return fail('INVALID_QTY');
+
+  const curUnlabeled = num(cur.unlabeled_qty);
+  const remaining = Math.max(curUnlabeled - lq, 0);
+  const nextIsLabeled = remaining === 0 ? 1 : 0;
+
+  await db.runAsync(
+    `UPDATE production_entries SET is_labeled = ?, unlabeled_qty = ? WHERE id = ?`,
+    [nextIsLabeled, remaining, entryId]
+  );
+  return done({ id: entryId, is_labeled: nextIsLabeled, unlabeled_qty: remaining });
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1188,6 +1358,8 @@ export async function fetchHistoryEntries(groupBy, groupKey) {
             pe.defect_qty,
             pe.defect_box_qty,
             pe.order_line_id,
+            pe.is_labeled,
+            pe.unlabeled_qty,
             ol.item_code AS ntk,
             p.code AS po,
             er.ref_no,
@@ -1214,6 +1386,8 @@ export async function fetchHistoryEntries(groupBy, groupKey) {
     ntk: r.ntk,
     po: r.po,
     refNo: r.ref_no || null,
+    is_labeled: num(r.is_labeled ?? 1),
+    unlabeled_qty: num(r.unlabeled_qty ?? 0),
   }));
 }
 
@@ -1846,10 +2020,12 @@ export async function importEntriesFromJson(batchId, entries) {
     }
     const defect = Math.max(parseQty(e?.defect_qty ?? e?.defectQty) ?? 0, 0);
     const defectBox = Math.max(parseQty(e?.defect_box_qty ?? e?.defectBoxQty) ?? 0, 0);
+    const isLabeled = (e?.is_labeled === 0 || e?.isLabeled === 0 || e?.is_labeled === false || e?.isLabeled === false) ? 0 : 1;
+    const unlabeledQty = isLabeled === 0 ? Math.min(Math.max(parseQty(e?.unlabeled_qty ?? e?.unlabeledQty) ?? q, 0), q) : 0;
     const res = await db.runAsync(
-      `INSERT INTO production_entries (order_line_id, date, qty, line, defect_qty, defect_box_qty)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [lineId, d, q, e?.line === 'auto' ? 'auto' : 'manual', defect, defectBox]
+      `INSERT INTO production_entries (order_line_id, date, qty, line, defect_qty, defect_box_qty, is_labeled, unlabeled_qty)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [lineId, d, q, e?.line === 'auto' ? 'auto' : 'manual', defect, defectBox, isLabeled, unlabeledQty]
     );
     const types = String(e?.defect_types ?? e?.defectTypes ?? '').split(',').map(x => x.trim()).filter(Boolean);
     await writeDefects(db, res.lastInsertRowId, defect, types, defectBox);
@@ -2022,8 +2198,8 @@ export async function restoreDatabaseBackup(backupPayload) {
       // 8. Nạp lại production_entries (giữ nguyên ID)
       for (const pe of data.production_entries) {
         await db.runAsync(
-          'INSERT INTO production_entries (id, order_line_id, date, qty, line, defect_qty, defect_box_qty) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          [pe.id, pe.order_line_id, pe.date, pe.qty, pe.line ?? 'manual', pe.defect_qty ?? 0, pe.defect_box_qty ?? 0]
+          'INSERT INTO production_entries (id, order_line_id, date, qty, line, defect_qty, defect_box_qty, is_labeled, unlabeled_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [pe.id, pe.order_line_id, pe.date, pe.qty, pe.line ?? 'manual', pe.defect_qty ?? 0, pe.defect_box_qty ?? 0, pe.is_labeled ?? 1, pe.unlabeled_qty ?? 0]
         );
       }
 

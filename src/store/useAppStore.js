@@ -25,6 +25,11 @@ export const useAppStore = create((set, get) => ({
   // Cấu trúc container → kiện → dòng hàng, đọc từ 3 bảng thật (thay blob JSON).
   containerData: [],
 
+  // FEAT-28: Danh sách và KPI sản phẩm chờ dán nhãn (Checker)
+  unlabeledEntries: [],
+  unlabeledSummary: { count: 0, totalPcs: 0 },
+  unlabeledCount: 0,
+
   activeFilter: 'all',
   activeStatusFilter: 'all',
   activeContainerFilter: 'all',
@@ -46,18 +51,44 @@ export const useAppStore = create((set, get) => ({
   init: async () => {
     const db = await getDb();
     const batchId = await getActiveBatchId(db);
-    const [items, poRows, archives, containerData] = await Promise.all([
+    const [items, poRows, archives, containerData, unlabeledEntries, unlabeledSummary] = await Promise.all([
       q.fetchItemsWithStats(batchId),
       q.fetchPoSummaries(batchId),
       q.fetchArchives(),
       q.fetchContainersView(batchId),
+      q.fetchUnlabeledEntries(batchId),
+      q.fetchUnlabeledSummary(batchId),
     ]);
-    set({ ready: true, batchId, items, poRows, archives, containerData });
+    set({
+      ready: true,
+      batchId,
+      items,
+      poRows,
+      archives,
+      containerData,
+      unlabeledEntries,
+      unlabeledSummary,
+      unlabeledCount: unlabeledSummary.count,
+    });
   },
 
   // FEAT-15: nạp lại danh sách đơn lưu trữ (dùng sau khi xoá hẳn một đơn).
   refreshArchives: async () => {
     set({ archives: await q.fetchArchives() });
+  },
+
+  // FEAT-28: nạp lại danh sách & KPI sản phẩm chờ dán nhãn
+  refreshUnlabeledData: async () => {
+    const { batchId } = get();
+    const [unlabeledEntries, unlabeledSummary] = await Promise.all([
+      q.fetchUnlabeledEntries(batchId),
+      q.fetchUnlabeledSummary(batchId),
+    ]);
+    set({
+      unlabeledEntries,
+      unlabeledSummary,
+      unlabeledCount: unlabeledSummary.count,
+    });
   },
 
   // Nạp lại `items`. Đây là **phễu duy nhất** cho mọi thay đổi mã hàng/nhật ký nên số liệu
@@ -95,7 +126,7 @@ export const useAppStore = create((set, get) => ({
         timestamp: Date.now(),
       },
     });
-    await get().refreshItems();
+    await Promise.all([get().refreshItems(), get().refreshUnlabeledData()]);
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
     return { ok: true };
   },
@@ -103,21 +134,39 @@ export const useAppStore = create((set, get) => ({
   updateEntry: async (entryId, payload) => {
     const res = await q.updateEntry(entryId, payload);
     if (res && res.ok === false) return res;
-    await get().refreshItems();
+    await Promise.all([get().refreshItems(), get().refreshUnlabeledData()]);
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
     return { ok: true };
   },
 
   removeEntry: async (entryId) => {
     await q.removeEntry(entryId);
-    await get().refreshItems();
+    await Promise.all([get().refreshItems(), get().refreshUnlabeledData()]);
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
   },
 
   removeHistoryGroup: async (groupBy, groupKey) => {
     const res = await q.removeHistoryGroup(groupBy, groupKey);
     if (res && res.ok === false) return res;
-    await get().refreshItems();
+    await Promise.all([get().refreshItems(), get().refreshUnlabeledData()]);
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return res;
+  },
+
+  // ---------- DÁN NHÃN SẢN PHẨM (FEAT-28) ----------
+
+  markEntryFullyLabeled: async (entryId) => {
+    const res = await q.markEntryFullyLabeled(entryId);
+    if (res && res.ok === false) return res;
+    await Promise.all([get().refreshItems(), get().refreshUnlabeledData()]);
+    set((s) => ({ dataVersion: s.dataVersion + 1 }));
+    return res;
+  },
+
+  updateEntryLabeledQty: async (entryId, qty) => {
+    const res = await q.updateEntryLabeledQty(entryId, qty);
+    if (res && res.ok === false) return res;
+    await Promise.all([get().refreshItems(), get().refreshUnlabeledData()]);
     set((s) => ({ dataVersion: s.dataVersion + 1 }));
     return res;
   },
@@ -271,12 +320,21 @@ export const useAppStore = create((set, get) => ({
           get().refreshItems(),
           get().refreshContainerData(),
           get().refreshArchives(),
+          get().refreshUnlabeledData(),
         ]);
         set((s) => ({ dataVersion: s.dataVersion + 1 }));
         return { ok: true, batchId: res.id, partial: true, completedPos: res.completedPos };
       } else {
         // FEAT-14: đơn mới luôn **trắng** ⇒ không nạp lại gì cả, chỉ đổi id.
-        set({ batchId: res.id, items: [], poRows: [], containerData: [] });
+        set({
+          batchId: res.id,
+          items: [],
+          poRows: [],
+          containerData: [],
+          unlabeledEntries: [],
+          unlabeledSummary: { count: 0, totalPcs: 0 },
+          unlabeledCount: 0,
+        });
         await get().refreshArchives();
         set((s) => ({ dataVersion: s.dataVersion + 1 }));
         return { ok: true, batchId: res.id, partial: false };

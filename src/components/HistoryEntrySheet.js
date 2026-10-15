@@ -54,6 +54,9 @@ export default function HistoryEntrySheet({
       tear: types.includes('tear'),
     };
   });
+  const isUnlabeledInitially = entry ? (entry.is_labeled === 0 || (entry.unlabeled_qty && entry.unlabeled_qty > 0)) : false;
+  const [isUnlabeled, setIsUnlabeled] = useState(isUnlabeledInitially);
+  const [unlabeledQty, setUnlabeledQty] = useState(entry?.unlabeled_qty ? String(entry.unlabeled_qty) : '');
   const [busy, setBusy] = useState(false);
 
   // Tránh bàn phím che mất input
@@ -133,6 +136,9 @@ export default function HistoryEntrySheet({
 
     setBusy(true);
     try {
+      const parsedUnlabeled = isUnlabeled
+        ? (unlabeledQty && unlabeledQty.trim() ? parseQty(unlabeledQty) : parsedQty)
+        : 0;
       const payload = {
         orderLineId: isEdit ? entry.orderLineId : selectedOrderLineId,
         date: trimmedDate,
@@ -142,6 +148,8 @@ export default function HistoryEntrySheet({
         defectBoxQty: parsedDefectBox,
         defectTypes: activeTypes,
         refNo: selectedRef || null,
+        isLabeled: isUnlabeled ? 0 : 1,
+        unlabeledQty: parsedUnlabeled,
       };
 
       const res = await onSubmit(payload);
@@ -394,6 +402,43 @@ export default function HistoryEntrySheet({
                     })}
                   </View>
 
+                  {/* Tuỳ chọn: Chưa dán nhãn */}
+                  <View style={{ marginTop: 14 }}>
+                    <TouchableOpacity
+                      style={[
+                        styles.unlabeledToggle,
+                        {
+                          borderColor: isUnlabeled ? theme.warn : theme.line,
+                          backgroundColor: isUnlabeled ? theme.warn + '18' : theme.bg,
+                        },
+                      ]}
+                      onPress={() => setIsUnlabeled(!isUnlabeled)}
+                      disabled={busy}
+                    >
+                      <Text style={{ color: isUnlabeled ? theme.warn : theme.sub, fontSize: 13, fontWeight: isUnlabeled ? '700' : '600' }}>
+                        {isUnlabeled ? '🏷 Chưa dán nhãn hoàn chỉnh' : 'Dán nhãn: Đã dán hoàn chỉnh (mặc định)'}
+                      </Text>
+                    </TouchableOpacity>
+
+                    {isUnlabeled && (
+                      <View style={{ marginTop: 6, flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 12, color: theme.sub, marginRight: 8, fontWeight: '600' }}>SL chưa dán:</Text>
+                        <TextInput
+                          style={[
+                            styles.input(theme),
+                            { flex: 1, height: 40 },
+                          ]}
+                          keyboardType="numeric"
+                          placeholder={`Mặc định = tất cả ${qty || 'SL'}`}
+                          placeholderTextColor={theme.sub}
+                          value={unlabeledQty}
+                          onChangeText={setUnlabeledQty}
+                          editable={!busy}
+                        />
+                      </View>
+                    )}
+                  </View>
+
                   {/* Nút hành động */}
                   <View style={styles.btnRow}>
                     <TouchableOpacity
@@ -518,5 +563,13 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700',
     fontSize: 14,
+  },
+  unlabeledToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
   },
 });

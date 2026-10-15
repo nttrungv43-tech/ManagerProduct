@@ -48,7 +48,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "node --no-warnings scripts/test-validateQty.mjs && node --no-warnings scripts/test-deleteItem.mjs && node --no-warnings scripts/test-deleteItemsByPo.mjs && node --no-warnings scripts/test-date.mjs && node --no-warnings scripts/test-archiveDelete.mjs && node --no-warnings scripts/test-archiveCollapse.mjs && node --no-warnings scripts/test-packingV1.mjs && node --no-warnings scripts/test-importFormat.mjs && node --no-warnings scripts/test-backupFormat.mjs && node --no-warnings scripts/test-backupRestore.mjs && npm run --silent test:excelParser && npm run --silent test:refFormat && npm run --silent test:finishPo && npm run --silent test:container && npm run --silent test:palletCrud && npm run --silent test:lastUpdated && npm run --silent test:schemaV2 && npm run --silent test:dbInit && npm run --silent test:queries && npm run --silent test:sync && npm run --silent test:historyCrud && npm run --silent test:multiPo && npm run --silent test:deleteHistoryGroup && npm run --silent test:excelAccumulate && npm run --silent test:containerSearch && npm run --silent test:palletPack && npm run --silent test:historyDefects",
+    "test": "node --no-warnings scripts/test-validateQty.mjs && node --no-warnings scripts/test-deleteItem.mjs && node --no-warnings scripts/test-deleteItemsByPo.mjs && node --no-warnings scripts/test-date.mjs && node --no-warnings scripts/test-archiveDelete.mjs && node --no-warnings scripts/test-archiveCollapse.mjs && node --no-warnings scripts/test-packingV1.mjs && node --no-warnings scripts/test-importFormat.mjs && node --no-warnings scripts/test-backupFormat.mjs && node --no-warnings scripts/test-backupRestore.mjs && npm run --silent test:excelParser && npm run --silent test:refFormat && npm run --silent test:finishPo && npm run --silent test:container && npm run --silent test:palletCrud && npm run --silent test:lastUpdated && npm run --silent test:schemaV2 && npm run --silent test:dbInit && npm run --silent test:queries && npm run --silent test:sync && npm run --silent test:historyCrud && npm run --silent test:multiPo && npm run --silent test:deleteHistoryGroup && npm run --silent test:excelAccumulate && npm run --silent test:containerSearch && npm run --silent test:palletPack && npm run --silent test:historyDefects && npm run --silent test:labeling",
     "test:validate": "node --no-warnings scripts/test-validateQty.mjs",
     "test:delete": "node --no-warnings scripts/test-deleteItem.mjs",
     "test:deletePo": "node --no-warnings scripts/test-deleteItemsByPo.mjs",
@@ -76,7 +76,8 @@
     "test:excelAccumulate": "node --no-warnings --import ./scripts/e2e-sqlite/register.mjs scripts/test-excelAccumulate.mjs",
     "test:containerSearch": "node --no-warnings scripts/test-containerSearch.mjs",
     "test:palletPack": "node --no-warnings scripts/test-palletPackAndLabel.mjs",
-    "test:historyDefects": "node --no-warnings --import ./scripts/e2e-sqlite/register.mjs scripts/test-historyDefectTypes.mjs"
+    "test:historyDefects": "node --no-warnings --import ./scripts/e2e-sqlite/register.mjs scripts/test-historyDefectTypes.mjs",
+    "test:labeling": "node --no-warnings --import ./scripts/e2e-sqlite/register.mjs scripts/test-labelingTab.mjs"
   },
   "private": true
 }
