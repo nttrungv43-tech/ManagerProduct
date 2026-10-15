@@ -676,15 +676,16 @@ export default function ItemCard({
                 <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
                   {[['yellow', 'Thẻ vàng'], ['red', 'Thẻ đỏ'], ['tear', 'Rách bọc']].map(([key, label]) => {
                     const chipColor = key === 'yellow' ? '#FFD600' : key === 'red' ? '#E53935' : '#FFFFFF';
-                    const textColor = key === 'tear' ? '#333' : '#FFFFFF';
+                    const textColor = (key === 'tear' || key === 'yellow') ? '#333' : '#FFFFFF';
+                    const active = !!defectTypes[key];
                     return (
                       <TouchableOpacity
                         key={key}
                         disabled={isSubmitting}
-                        style={[styles.defectChip, { borderColor: theme.line, backgroundColor: defectTypes[key] ? chipColor : theme.card }]}
+                        style={[styles.defectChip, { borderColor: theme.line, backgroundColor: active ? chipColor : theme.card }]}
                         onPress={() => setDefectTypes(prev => ({ ...prev, [key]: !prev[key] }))}
                       >
-                        <Text style={{ color: defectTypes[key] ? textColor : theme.sub, fontSize: 12.5 }}>{label}</Text>
+                        <Text style={{ color: active ? textColor : theme.sub, fontSize: 12.5, fontWeight: active ? '700' : '500' }}>{label}</Text>
                       </TouchableOpacity>
                     );
                   })}
@@ -1111,7 +1112,7 @@ export default function ItemCard({
                         <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                           {[['yellow', 'Thẻ vàng'], ['red', 'Thẻ đỏ'], ['tear', 'Rách bọc']].map(([key, label]) => {
                             const chipColor = key === 'yellow' ? '#FFD600' : key === 'red' ? '#E53935' : '#FFFFFF';
-                            const textColor = key === 'tear' ? '#333' : '#FFFFFF';
+                            const textColor = (key === 'tear' || key === 'yellow') ? '#333' : '#FFFFFF';
                             const active = !!editDefectTypes[key];
                             return (
                               <TouchableOpacity

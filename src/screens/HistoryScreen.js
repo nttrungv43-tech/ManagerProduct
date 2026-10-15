@@ -1,5 +1,5 @@
-// src/screens/HistoryScreen.js
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { useFocusEffect } from 'expo-router';
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import { formatDisplayDate, todayLocal } from '@/utils/date';
 import BackupRestoreSection from '@/components/BackupRestoreSection';
 import HistoryEntrySheet from '@/components/HistoryEntrySheet';
 import DeleteHistoryModal from '@/components/DeleteHistoryModal';
+import DefectBadgeList, { getDefectColor } from '@/components/DefectBadges';
 
 export default function HistoryScreen() {
   const theme = getTheme(useColorScheme());
@@ -45,18 +46,52 @@ export default function HistoryScreen() {
   const [editingEntry, setEditingEntry] = useState(null);
   const [sheetInitialDate, setSheetInitialDate] = useState(null);
 
-  // Quản lý Modal xoá lịch sử theo ngày / tháng / năm
+// Quản lý Modal xoá lịch sử theo ngày / tháng / năm
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
 
-  // Reset state and reload when filter or dataVersion changes
+  // Nạp lại danh sách lịch sử và cập nhật ngay cả các nhóm đang mở
+  const reloadHistory = useCallback(async () => {
+    try {
+      const nextGroups = await fetchHistoryGrouped(historyGroup, historyFilterValue);
+      setGroups(nextGroups);
+      if (expanded.size > 0) {
+        const keys = Array.from(expanded);
+        const detailPairs = await Promise.all(
+          keys.map(async k => [k, await fetchHistoryDetail(historyGroup, k)])
+        );
+        const entryPairs = await Promise.all(
+          keys.map(async k => [k, await fetchHistoryEntries(historyGroup, k)])
+        );
+        setDetails(prev => ({ ...prev, ...Object.fromEntries(detailPairs) }));
+        setEntriesByGroup(prev => ({ ...prev, ...Object.fromEntries(entryPairs) }));
+      }
+    } catch {
+      // ignore
+    }
+  }, [historyGroup, historyFilterValue, expanded]);
+
+  // Luôn làm mới dữ liệu mỗi khi người dùng chuyển sang tab Lịch sử
+  useFocusEffect(
+    useCallback(() => {
+      reloadHistory();
+    }, [reloadHistory])
+  );
+
+  // Cập nhật khi dataVersion thay đổi (vừa nhập sản lượng ở tab khác)
   useEffect(() => {
-    fetchHistoryGrouped(historyGroup, historyFilterValue).then(setGroups);
+    /* eslint-disable react-hooks/set-state-in-effect */
+    reloadHistory();
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [dataVersion, reloadHistory]);
+
+  // Khi đổi chế độ xem (ngày/tháng/năm), reset trạng thái mở rộng
+  useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect */
     setExpanded(new Set());
     setDetails({});
     setEntriesByGroup({});
     /* eslint-enable react-hooks/set-state-in-effect */
-  }, [historyGroup, historyFilterValue, dataVersion]);
+  }, [historyGroup, historyFilterValue]);
 
   async function toggleGroup(groupKey) {
     const next = new Set(expanded);
@@ -244,12 +279,15 @@ export default function HistoryScreen() {
                 <View style={styles.numsRow}>
                   <Text style={{ color: theme.sub, fontSize: 12 }}>Thủ công: {g.manualTotal.toLocaleString()}</Text>
                   <Text style={{ color: theme.sub, fontSize: 12 }}>Tự động: {g.autoTotal.toLocaleString()}</Text>
-                  <Text style={{ color: theme.bad, fontSize: 12 }}>
-                    Lỗi: {[
-                      g.defectTotal > 0 ? `${g.defectTotal.toLocaleString()} pcs` : null,
-                      g.defectBoxTotal > 0 ? `${g.defectBoxTotal.toLocaleString()} thùng` : null,
-                    ].filter(Boolean).join(', ') || '0'}
-                  </Text>
+                  <View style={styles.defectHeaderGroup}>
+                    <Text style={{ color: (g.defectTotal > 0 || g.defectBoxTotal > 0) ? getDefectColor(g.defectTypes, theme.warn) : theme.sub, fontSize: 12, fontWeight: (g.defectTotal > 0 || g.defectBoxTotal > 0) ? '600' : '400' }}>
+                      Lỗi: {[
+                        g.defectTotal > 0 ? `${g.defectTotal.toLocaleString()} pcs` : null,
+                        g.defectBoxTotal > 0 ? `${g.defectBoxTotal.toLocaleString()} thùng` : null,
+                      ].filter(Boolean).join(', ') || '0'}
+                    </Text>
+                    <DefectBadgeList types={g.defectTypes} theme={theme} size="sm" />
+                  </View>
                 </View>
 
                 {isOpen && (
@@ -274,12 +312,15 @@ export default function HistoryScreen() {
                                 {hasMultipleRefs ? 'Tổng ' : ''}{r.qty.toLocaleString()} pcs
                               </Text>
                               {Boolean(r.defect_qty || r.defect_box_qty) && (
-                                <Text style={{ color: theme.bad, fontSize: 11, fontWeight: '500', marginTop: 1 }}>
-                                  Lỗi: {[
-                                    r.defect_qty ? `${r.defect_qty.toLocaleString()} pcs` : null,
-                                    r.defect_box_qty ? `${r.defect_box_qty.toLocaleString()} thùng` : null,
-                                  ].filter(Boolean).join(', ')}
-                                </Text>
+                                <View style={{ alignItems: 'flex-end', marginTop: 2 }}>
+                                  <Text style={{ color: getDefectColor(r.defectTypes, theme.warn), fontSize: 11, fontWeight: '600' }}>
+                                    Lỗi: {[
+                                      r.defect_qty ? `${r.defect_qty.toLocaleString()} pcs` : null,
+                                      r.defect_box_qty ? `${r.defect_box_qty.toLocaleString()} thùng` : null,
+                                    ].filter(Boolean).join(', ')}
+                                  </Text>
+                                  <DefectBadgeList types={r.defectTypes} theme={theme} size="sm" style={{ marginTop: 2 }} />
+                                </View>
                               )}
                             </View>
                           </View>
@@ -291,15 +332,22 @@ export default function HistoryScreen() {
                                   <Text style={{ color: theme.sub, fontSize: 11.5, paddingLeft: 8 }}>
                                     ↳ Ref {rf.refNo}
                                   </Text>
-                                  <Text style={{ color: theme.sub, fontSize: 11.5 }}>
-                                    {rf.qty.toLocaleString()} pcs
-                                    {Boolean(rf.defect_qty || rf.defect_box_qty)
-                                      ? ` · Lỗi ${[
-                                          rf.defect_qty ? `${rf.defect_qty.toLocaleString()} pcs` : null,
-                                          rf.defect_box_qty ? `${rf.defect_box_qty.toLocaleString()} thùng` : null,
-                                        ].filter(Boolean).join(', ')}`
-                                      : ''}
-                                  </Text>
+                                  <View style={{ alignItems: 'flex-end' }}>
+                                    <Text style={{ color: theme.sub, fontSize: 11.5 }}>
+                                      {rf.qty.toLocaleString()} pcs
+                                    </Text>
+                                    {Boolean(rf.defect_qty || rf.defect_box_qty) && (
+                                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 1 }}>
+                                        <Text style={{ color: getDefectColor(rf.defectTypes, theme.warn), fontSize: 11, fontWeight: '600' }}>
+                                          Lỗi: {[
+                                            rf.defect_qty ? `${rf.defect_qty.toLocaleString()} pcs` : null,
+                                            rf.defect_box_qty ? `${rf.defect_box_qty.toLocaleString()} thùng` : null,
+                                          ].filter(Boolean).join(', ')}
+                                        </Text>
+                                        <DefectBadgeList types={rf.defectTypes} theme={theme} size="sm" />
+                                      </View>
+                                    )}
+                                  </View>
                                 </View>
                               ))}
                               {r.unattributedQty > 0 && (
@@ -356,16 +404,20 @@ export default function HistoryScreen() {
                                 <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>
                                   {entry.qty.toLocaleString()} pcs
                                 </Text>
-                                {Boolean(entry.defect_qty > 0 || entry.defect_box_qty > 0) && (
-                                  <Text style={{ color: theme.bad, fontSize: 11.5 }}>
-                                    · Lỗi: {[
+                              </View>
+
+                              {Boolean(entry.defect_qty > 0 || entry.defect_box_qty > 0) && (
+                                <View style={styles.entryDefectRow}>
+                                  <Ionicons name="warning-outline" size={13} color={getDefectColor(entry.defect_types, theme.warn)} style={{ marginRight: 3 }} />
+                                  <Text style={{ color: getDefectColor(entry.defect_types, theme.warn), fontSize: 11.5, fontWeight: '600', marginRight: 5 }}>
+                                    Lỗi: {[
                                       entry.defect_qty > 0 ? `${entry.defect_qty.toLocaleString()} pcs` : null,
                                       entry.defect_box_qty > 0 ? `${entry.defect_box_qty.toLocaleString()} thùng` : null,
                                     ].filter(Boolean).join(', ')}
-                                    {entry.defect_types?.length ? ` (${entry.defect_types.join(', ')})` : ''}
                                   </Text>
-                                )}
-                              </View>
+                                  <DefectBadgeList types={entry.defect_types} theme={theme} size="sm" />
+                                </View>
+                              )}
                             </View>
 
                             <View style={styles.entryActions}>
@@ -516,6 +568,8 @@ const styles = StyleSheet.create({
   },
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   numsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 8 },
+  defectHeaderGroup: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
+  entryDefectRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 5 },
   itemBlock: { paddingVertical: 6, borderTopWidth: 1 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   subList: { marginTop: 3, paddingLeft: 6 },

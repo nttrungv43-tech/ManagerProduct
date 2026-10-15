@@ -1,32 +1,41 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { formatDisplayDate } from '@/utils/date';
+import DefectBadgeList, { getDefectColor } from '@/components/DefectBadges';
 
 export default function EntryLogRow({ entry, po, onEdit, onDelete, theme }) {
   const lineLabel = entry.line === 'auto' ? 'Tự động' : 'Thủ công';
   const defectTypes = (entry.defect_types || '').split(',').filter(Boolean);
-  const typeLabels = { yellow: 'Thẻ vàng', red: 'Thẻ đỏ', tear: 'Rách bọc' };
   // FEAT-23: số hiệu đã gắn. Rỗng ⇒ nhật ký nhập bằng form gốc, **không bịa** ref (AC-RF-07).
   const refLabelText = (entry.ref_no || '').trim();
 
   const defectParts = [];
-  if (entry.defect_qty > 0) defectParts.push(`${entry.defect_qty} pcs`);
-  if (entry.defect_box_qty > 0) defectParts.push(`${entry.defect_box_qty} thùng`);
-  const defectText = defectParts.length ? ` · Lỗi: ${defectParts.join(', ')}` : '';
+  if (entry.defect_qty > 0) defectParts.push(`${entry.defect_qty.toLocaleString('vi-VN')} pcs`);
+  if (entry.defect_box_qty > 0) defectParts.push(`${entry.defect_box_qty.toLocaleString('vi-VN')} thùng`);
+
+  const defectTextColor = getDefectColor(defectTypes, theme.warn);
 
   return (
     <View style={[styles.row, { borderTopColor: theme.line }]}>
-      <Text style={{ color: theme.sub, fontSize: 12, flex: 1 }}>
-        {formatDisplayDate(entry.date)} — {entry.qty} pcs · {lineLabel}
-        {/* PO truyền từ thẻ cha: mọi nhật ký đã thuộc đúng một dòng đơn hàng nên không còn khả năng
-            "chưa gắn PO" (hết từ FEAT-21). Trước đó dòng này đọc `entry.po` — cột không được chọn ⇒
-            luôn hiện "chưa gắn PO", tức sai. */}
-        {po ? ` · PO ${po}` : ''}
-        {refLabelText ? ` · ${refLabelText}` : ' · chưa gắn số hiệu'}
-        {defectText}
-        {defectTypes.length ? ` (${defectTypes.map(t => typeLabels[t]).join(', ')})` : ''}
-      </Text>
-      <View style={{ flexDirection: 'row', gap: 10 }}>
+      <View style={{ flex: 1, paddingRight: 8 }}>
+        <Text style={{ color: theme.sub, fontSize: 12 }}>
+          {formatDisplayDate(entry.date)} — {entry.qty.toLocaleString('vi-VN')} pcs · {lineLabel}
+          {/* PO truyền từ thẻ cha: mọi nhật ký đã thuộc đúng một dòng đơn hàng nên không còn khả năng
+              "chưa gắn PO" (hết từ FEAT-21). Trước đó dòng này đọc `entry.po` — cột không được chọn ⇒
+              luôn hiện "chưa gắn PO", tức sai. */}
+          {po ? ` · PO ${po}` : ''}
+          {refLabelText ? ` · ${refLabelText}` : ' · chưa gắn số hiệu'}
+        </Text>
+        {defectParts.length > 0 && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 4, marginTop: 3 }}>
+            <Text style={{ color: defectTextColor, fontSize: 11, fontWeight: '600' }}>
+              Lỗi: {defectParts.join(', ')}
+            </Text>
+            <DefectBadgeList types={defectTypes} theme={theme} size="sm" />
+          </View>
+        )}
+      </View>
+      <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
         <TouchableOpacity onPress={onEdit}><Text style={{ color: theme.accent, fontSize: 12 }}>Sửa</Text></TouchableOpacity>
         <TouchableOpacity onPress={onDelete}><Text style={{ color: theme.bad, fontSize: 12 }}>Xoá</Text></TouchableOpacity>
       </View>

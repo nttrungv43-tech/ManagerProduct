@@ -1065,6 +1065,7 @@ export async function fetchHistoryGrouped(groupBy, filterValue) {
   const db = await getDb();
   const expr = HISTORY_GROUP_EXPR[groupBy]?.('e');
   if (!expr) return [];
+  const expr2 = HISTORY_GROUP_EXPR[groupBy]?.('e2');
   const where = filterValue ? `WHERE ${expr} = ?` : '';
   const rows = await db.getAllAsync(
     `SELECT ${expr} AS group_key,
@@ -1072,7 +1073,13 @@ export async function fetchHistoryGrouped(groupBy, filterValue) {
             COALESCE(SUM(CASE WHEN e.line = 'manual' THEN e.qty ELSE 0 END),0) AS manual_total,
             COALESCE(SUM(CASE WHEN e.line = 'auto'   THEN e.qty ELSE 0 END),0) AS auto_total,
             COALESCE(SUM(e.defect_qty),0) AS defect_total,
-            COALESCE(SUM(e.defect_box_qty),0) AS defect_box_total
+            COALESCE(SUM(e.defect_box_qty),0) AS defect_box_total,
+            (
+              SELECT GROUP_CONCAT(DISTINCT pd.type)
+              FROM production_entries e2
+              JOIN production_defects pd ON pd.entry_id = e2.id
+              WHERE ${expr2} = ${expr}
+            ) AS defect_types
      FROM production_entries e
      ${where}
      GROUP BY ${expr} ORDER BY group_key DESC`,
@@ -1085,6 +1092,7 @@ export async function fetchHistoryGrouped(groupBy, filterValue) {
     autoTotal: num(r.auto_total),
     defectTotal: num(r.defect_total),
     defectBoxTotal: num(r.defect_box_total),
+    defectTypes: r.defect_types ? r.defect_types.split(',').filter(Boolean) : [],
   }));
 }
 
@@ -1093,6 +1101,7 @@ export async function fetchHistoryDetail(groupBy, groupKey) {
   const db = await getDb();
   const expr = HISTORY_GROUP_EXPR[groupBy]?.('pe');
   if (!expr) return [];
+  const expr2 = HISTORY_GROUP_EXPR[groupBy]?.('pe2');
   const rows = await db.getAllAsync(
     `SELECT ol.id AS order_line_id,
             p.code AS po,
@@ -1100,7 +1109,16 @@ export async function fetchHistoryDetail(groupBy, groupKey) {
             er.ref_no,
             COALESCE(SUM(pe.qty), 0) AS qty,
             COALESCE(SUM(pe.defect_qty), 0) AS defect_qty,
-            COALESCE(SUM(pe.defect_box_qty), 0) AS defect_box_qty
+            COALESCE(SUM(pe.defect_box_qty), 0) AS defect_box_qty,
+            (
+              SELECT GROUP_CONCAT(DISTINCT pd.type)
+              FROM production_entries pe2
+              JOIN production_defects pd ON pd.entry_id = pe2.id
+              LEFT JOIN production_entry_refs er2 ON er2.entry_id = pe2.id
+              WHERE ${expr2} = ?
+                AND pe2.order_line_id = ol.id
+                AND ((er2.ref_no IS NULL AND er.ref_no IS NULL) OR er2.ref_no = er.ref_no)
+            ) AS defect_types
      FROM production_entries pe
      JOIN order_lines ol ON ol.id = pe.order_line_id
      JOIN pos p ON p.id = ol.po_id
@@ -1108,7 +1126,7 @@ export async function fetchHistoryDetail(groupBy, groupKey) {
      WHERE ${expr} = ?
      GROUP BY ol.id, er.ref_no
      ORDER BY p.code ASC, ol.item_code ASC, er.ref_no ASC`,
-    [groupKey]
+    [groupKey, groupKey]
   );
 
   const grouped = new Map();
@@ -1124,23 +1142,34 @@ export async function fetchHistoryDetail(groupBy, groupKey) {
         defect_box_qty: 0,
         refs: [],
         unattributedQty: 0,
+        defectTypesSet: new Set(),
       });
     }
     const item = grouped.get(r.order_line_id);
     const q = num(r.qty);
     const dq = num(r.defect_qty);
     const dbq = num(r.defect_box_qty);
+    const dTypes = r.defect_types ? r.defect_types.split(',').filter(Boolean) : [];
+    dTypes.forEach(t => item.defectTypesSet.add(t));
+
     item.qty += q;
     item.defect_qty += dq;
     item.defect_box_qty += dbq;
     if (r.ref_no) {
-      item.refs.push({ refNo: r.ref_no, qty: q, defect_qty: dq, defect_box_qty: dbq });
+      item.refs.push({ refNo: r.ref_no, qty: q, defect_qty: dq, defect_box_qty: dbq, defectTypes: dTypes });
     } else {
       item.unattributedQty += q;
+      item.unattributedDefectTypes = dTypes;
     }
   }
 
-  return [...grouped.values()];
+  return [...grouped.values()].map(it => {
+    const { defectTypesSet, ...rest } = it;
+    return {
+      ...rest,
+      defectTypes: Array.from(defectTypesSet),
+    };
+  });
 }
 
 /**
@@ -1162,7 +1191,7 @@ export async function fetchHistoryEntries(groupBy, groupKey) {
             ol.item_code AS ntk,
             p.code AS po,
             er.ref_no,
-            GROUP_CONCAT(pd.type) AS defect_types
+            GROUP_CONCAT(DISTINCT pd.type) AS defect_types
      FROM production_entries pe
      JOIN order_lines ol ON ol.id = pe.order_line_id
      JOIN pos p ON p.id = ol.po_id
@@ -1180,7 +1209,7 @@ export async function fetchHistoryEntries(groupBy, groupKey) {
     line: r.line,
     defect_qty: num(r.defect_qty),
     defect_box_qty: num(r.defect_box_qty),
-    defect_types: r.defect_types ? r.defect_types.split(',') : [],
+    defect_types: r.defect_types ? r.defect_types.split(',').filter(Boolean) : [],
     orderLineId: r.order_line_id,
     ntk: r.ntk,
     po: r.po,
