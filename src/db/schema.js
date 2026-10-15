@@ -201,6 +201,9 @@ CREATE TABLE IF NOT EXISTS pallet_lines (
   pallet_id     INTEGER NOT NULL REFERENCES pallets(id) ON DELETE CASCADE,
   order_line_id INTEGER NOT NULL REFERENCES order_lines(id) ON DELETE RESTRICT,
   qty           INTEGER NOT NULL DEFAULT 0 CHECK (qty >= 0),
+  packed_qty    INTEGER NOT NULL DEFAULT 0 CHECK (packed_qty >= 0),
+  is_labeled    INTEGER NOT NULL DEFAULT 0 CHECK (is_labeled IN (0, 1)),
+  note          TEXT,
   done          INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0, 1)),
   ref_no        TEXT,
   UNIQUE (pallet_id, order_line_id)
@@ -241,7 +244,7 @@ export const REQUIRED_COLUMNS = {
     'id', 'container_id', 'po_id', 'pallet_no', 'c_no', 'is_mixed',
     'length_m', 'width_m', 'height_m', 'volume_cbm', 'nw_kg', 'gw_kg',
   ],
-  pallet_lines: ['id', 'pallet_id', 'order_line_id', 'qty', 'done', 'ref_no'],
+  pallet_lines: ['id', 'pallet_id', 'order_line_id', 'qty', 'packed_qty', 'is_labeled', 'note', 'done', 'ref_no'],
 };
 
 /**
@@ -276,6 +279,9 @@ export const ADDABLE_COLUMN_DECLS = {
   'pallets.volume_cbm': 'REAL',
   'pallets.nw_kg': 'REAL',
   'pallets.gw_kg': 'REAL',
+  'pallet_lines.packed_qty': 'INTEGER NOT NULL DEFAULT 0',
+  'pallet_lines.is_labeled': 'INTEGER NOT NULL DEFAULT 0',
+  'pallet_lines.note': 'TEXT',
   'pallet_lines.ref_no': 'TEXT',
 };
 

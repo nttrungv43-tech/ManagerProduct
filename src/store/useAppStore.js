@@ -230,6 +230,27 @@ export const useAppStore = create((set, get) => ({
     return { ok: true };
   },
 
+  togglePallet: async (palletId, currentlyDone) => {
+    const res = await q.setPalletDone(palletId, !currentlyDone);
+    if (res && res.ok === false) return res;
+    await get().refreshContainerData();
+    return { ok: true };
+  },
+
+  updatePalletLinePackStatus: async (palletLineId, { packedQty, isLabeled, note }) => {
+    const res = await q.updatePalletLinePackStatus(palletLineId, { packedQty, isLabeled, note });
+    if (res && res.ok === false) return res;
+    await get().refreshContainerData();
+    return res;
+  },
+
+  togglePalletLineLabel: async (palletLineId) => {
+    const res = await q.togglePalletLineLabel(palletLineId);
+    if (res && res.ok === false) return res;
+    await get().refreshContainerData();
+    return res;
+  },
+
   /**
    * Hoàn tất đơn hàng (AC-CONT-07, FEAT-24).
    * Hỗ trợ hoàn tất toàn bộ hoặc một phần các PO được chọn (`poCodes`).

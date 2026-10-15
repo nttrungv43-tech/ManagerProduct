@@ -13,6 +13,7 @@ import ArchiveCard from '@/components/ArchiveCard';
 import PalletEditSheet, { palletErrorMessage } from '@/components/PalletEditSheet';
 import ContainerEditSheet from '@/components/ContainerEditSheet';
 import FinishOrderModal from '@/components/FinishOrderModal';
+import PackStatusModal from '@/components/PackStatusModal';
 
 export default function ContainersScreen() {
   const theme = getTheme(useColorScheme());
@@ -21,7 +22,9 @@ export default function ContainersScreen() {
     activeContainerFilter, setContainerFilter, containerData,
     addPallet, updatePallet, removePallet, deleteArchive, archivesBusy,
     updateContainer, removeContainer, addContainer,
+    updatePalletLinePackStatus, togglePalletLineLabel, togglePallet,
   } = useAppStore();
+  const [packModalTarget, setPackModalTarget] = useState(null); // { item, palletNo }
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedIds, setExpandedIds] = useState(new Set());
   // FEAT-15 (AC-ARCH-01/03): trạng thái mở nội dung của các thẻ đơn lưu trữ.
@@ -430,7 +433,8 @@ export default function ContainersScreen() {
             if (pd) cDone++;
             const q = p.items.reduce((s, it) => s + it.qty, 0);
             totalQty += q;
-            if (pd) doneQty += q;
+            const pPacked = p.items.reduce((s, it) => s + (it.packed_qty !== undefined ? it.packed_qty : (it.done ? it.qty : 0)), 0);
+            doneQty += Math.min(q, pPacked);
           });
           const pct = c.pallets.length ? Math.round((cDone / c.pallets.length) * 1000) / 10 : 0;
           const isFull = cDone === c.pallets.length;
@@ -502,7 +506,15 @@ export default function ContainersScreen() {
                       key={p.id}
                       pallet={p}
                       isMultiPo={isMultiPo}
+                      onOpenPackModal={(item, pNo) => setPackModalTarget({ item, palletNo: pNo })}
+                      onToggleLabel={async (palletLineId) => {
+                        const res = await togglePalletLineLabel(palletLineId);
+                        if (res && res.ok === false) {
+                          Alert.alert('Lỗi', res.error?.message || 'Không thể đổi trạng thái dán nhãn.');
+                        }
+                      }}
                       onToggleLine={togglePalletLine}
+                      onTogglePallet={togglePallet}
                       onEditPallet={pallet => openEditPallet(c, pallet, containerPos)}
                       onDeletePallet={pallet => confirmDeletePallet(c, pallet)}
                       theme={theme}
@@ -630,6 +642,23 @@ export default function ContainersScreen() {
           finishing={finishing}
           theme={theme}
         />
+
+        {packModalTarget && (
+          <PackStatusModal
+            key={packModalTarget.item.id}
+            visible={Boolean(packModalTarget)}
+            item={packModalTarget.item}
+            palletNo={packModalTarget.palletNo}
+            onClose={() => setPackModalTarget(null)}
+            onSave={async (payload) => {
+              const res = await updatePalletLinePackStatus(payload.palletLineId, payload);
+              if (res && res.ok === false) {
+                Alert.alert('Không lưu được', res.error?.message || 'Có lỗi xảy ra.');
+              }
+            }}
+            theme={theme}
+          />
+        )}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

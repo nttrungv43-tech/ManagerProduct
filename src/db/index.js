@@ -157,6 +157,15 @@ async function repairMissingColumns(db) {
       console.log(`[db] Đã bổ sung cột còn thiếu: ${table}.${col} ${decl}`);
     }
   }
+
+  // Đồng bộ dữ liệu cũ: những dòng đã done = 1 trước đó thì mặc định packed_qty = qty, is_labeled = 1
+  try {
+    await db.execAsync(
+      `UPDATE pallet_lines SET packed_qty = qty, is_labeled = 1 WHERE done = 1 AND packed_qty = 0`
+    );
+  } catch {
+    // pallet_lines chưa tạo thì bỏ qua
+  }
 }
 
 /**

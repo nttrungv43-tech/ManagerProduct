@@ -634,11 +634,10 @@ export async function fetchContainersView(batchId) {
     [id]
   );
   const lines = await db.getAllAsync(
-    `SELECT pl.id, pl.pallet_id, pl.order_line_id, pl.qty, pl.done, pl.ref_no, ol.item_code, pos.code AS po,
+    `SELECT pl.id, pl.pallet_id, pl.order_line_id, pl.qty, pl.packed_qty, pl.is_labeled, pl.note, pl.done, pl.ref_no, ol.item_code, pos.code AS po,
             COALESCE(
               NULLIF(TRIM(pl.ref_no), ''),
-              (SELECT GROUP_CONCAT(r.ref_no, ', ') FROM order_line_refs r WHERE r.order_line_id = ol.id),
-              (SELECT GROUP_CONCAT(ir.ref_no, ', ') FROM item_refs ir WHERE ir.order_batch_id = pos.order_batch_id AND ir.item_code = ol.item_code)
+              (SELECT GROUP_CONCAT(r.ref_no, ', ') FROM order_line_refs r WHERE r.order_line_id = ol.id)
             ) AS order_ref
      FROM pallet_lines pl
      JOIN order_lines ol ON ol.id = pl.order_line_id
@@ -656,20 +655,93 @@ export async function fetchContainersView(batchId) {
   for (const l of lines) {
     palletById.get(l.pallet_id)?.items.push({
       id: l.id, order_line_id: l.order_line_id, ntk: l.item_code,
-      qty: num(l.qty), done: !!l.done, po: l.po,
+      qty: num(l.qty),
+      packed_qty: num(l.packed_qty),
+      is_labeled: num(l.is_labeled) === 1,
+      note: l.note || '',
+      done: !!l.done,
+      po: l.po,
       order_ref: l.order_ref || null,
     });
   }
   return [...byContainer.values()];
 }
 
-/** Bật/tắt trạng thái đóng kiện của một dòng hàng. */
+/** Bật/tắt trạng thái đóng kiện của một dòng hàng (1-chạm). */
 export async function setPalletLineDone(palletLineId, done_) {
   const db = await getDb();
-  const cur = await db.getFirstAsync(`SELECT id FROM pallet_lines WHERE id = ?`, [palletLineId]);
+  const cur = await db.getFirstAsync(`SELECT id, qty FROM pallet_lines WHERE id = ?`, [palletLineId]);
   if (!cur) return fail('PALLET_NOT_FOUND');
-  await db.runAsync(`UPDATE pallet_lines SET done = ? WHERE id = ?`, [done_ ? 1 : 0, palletLineId]);
+  if (done_) {
+    await db.runAsync(
+      `UPDATE pallet_lines SET done = 1, packed_qty = ?, is_labeled = 1 WHERE id = ?`,
+      [num(cur.qty), palletLineId]
+    );
+  } else {
+    await db.runAsync(
+      `UPDATE pallet_lines SET done = 0, packed_qty = 0, is_labeled = 0 WHERE id = ?`,
+      [palletLineId]
+    );
+  }
   return done();
+}
+
+/** Bật/tắt trạng thái đóng toàn bộ các dòng hàng trong một kiện (1-chạm cho cả kiện). */
+export async function setPalletDone(palletId, done_) {
+  const db = await getDb();
+  const pal = await db.getFirstAsync(`SELECT id FROM pallets WHERE id = ?`, [palletId]);
+  if (!pal) return fail('PALLET_NOT_FOUND');
+  return withTransaction(db, async () => {
+    if (done_) {
+      await db.runAsync(
+        `UPDATE pallet_lines SET done = 1, packed_qty = qty, is_labeled = 1 WHERE pallet_id = ?`,
+        [palletId]
+      );
+    } else {
+      await db.runAsync(
+        `UPDATE pallet_lines SET done = 0, packed_qty = 0, is_labeled = 0 WHERE pallet_id = ?`,
+        [palletId]
+      );
+    }
+    return done();
+  });
+}
+
+/**
+ * Cập nhật tiến độ đóng kiện: số lượng đã đóng, trạng thái dán nhãn, ghi chú.
+ * Tự động tính: done = (packedQty >= qty && isLabeled === 1) ? 1 : 0.
+ */
+export async function updatePalletLinePackStatus(palletLineId, { packedQty, isLabeled, note }) {
+  const db = await getDb();
+  const cur = await db.getFirstAsync(`SELECT id, qty FROM pallet_lines WHERE id = ?`, [palletLineId]);
+  if (!cur) return fail('PALLET_NOT_FOUND');
+  const pQty = Math.max(0, num(packedQty));
+  const labeled = isLabeled ? 1 : 0;
+  const isDone = (pQty >= num(cur.qty) && labeled === 1) ? 1 : 0;
+  const cleanNote = note ? String(note).trim() : null;
+
+  await db.runAsync(
+    `UPDATE pallet_lines SET packed_qty = ?, is_labeled = ?, note = ?, done = ? WHERE id = ?`,
+    [pQty, labeled, cleanNote, isDone, palletLineId]
+  );
+  return done({ done: isDone, packedQty: pQty, isLabeled: labeled === 1 });
+}
+
+/**
+ * Bật/tắt nhanh trạng thái dán nhãn của một dòng hàng trong kiện.
+ */
+export async function togglePalletLineLabel(palletLineId) {
+  const db = await getDb();
+  const cur = await db.getFirstAsync(`SELECT id, qty, packed_qty, is_labeled FROM pallet_lines WHERE id = ?`, [palletLineId]);
+  if (!cur) return fail('PALLET_NOT_FOUND');
+  const newLabeled = cur.is_labeled ? 0 : 1;
+  const isDone = (num(cur.packed_qty) >= num(cur.qty) && newLabeled === 1) ? 1 : 0;
+
+  await db.runAsync(
+    `UPDATE pallet_lines SET is_labeled = ?, done = ? WHERE id = ?`,
+    [newLabeled, isDone, palletLineId]
+  );
+  return done({ isLabeled: newLabeled === 1, done: isDone });
 }
 
 /**
@@ -776,10 +848,10 @@ export async function updatePallet(batchId, containerId, palletNo, { no, items }
 
   return withTransaction(db, async () => {
     const existingLines = await db.getAllAsync(
-      `SELECT order_line_id, done FROM pallet_lines WHERE pallet_id = ?`,
+      `SELECT order_line_id, done, packed_qty, is_labeled, note FROM pallet_lines WHERE pallet_id = ?`,
       [pal.id]
     );
-    const doneByLineId = new Map(existingLines.map(l => [l.order_line_id, l.done]));
+    const lineStateMap = new Map(existingLines.map(l => [l.order_line_id, l]));
     const affectedLineIds = [
       ...existingLines.map(l => l.order_line_id),
       ...norm.map(it => it.order_line_id),
@@ -787,10 +859,14 @@ export async function updatePallet(batchId, containerId, palletNo, { no, items }
 
     await db.runAsync(`DELETE FROM pallet_lines WHERE pallet_id = ?`, [pal.id]);
     for (const it of norm) {
-      const isDone = it.done !== undefined ? (it.done ? 1 : 0) : (doneByLineId.get(it.order_line_id) ?? 0);
+      const prev = lineStateMap.get(it.order_line_id);
+      const isDone = it.done !== undefined ? (it.done ? 1 : 0) : (prev?.done ?? 0);
+      const packedQty = it.packed_qty !== undefined ? num(it.packed_qty) : (prev?.packed_qty ?? (isDone ? num(it.qty) : 0));
+      const isLabeled = it.is_labeled !== undefined ? (it.is_labeled ? 1 : 0) : (prev?.is_labeled ?? isDone);
+      const note = it.note !== undefined ? it.note : (prev?.note ?? null);
       await db.runAsync(
-        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty, done, ref_no) VALUES (?, ?, ?, ?, ?)`,
-        [pal.id, it.order_line_id, it.qty, isDone, it.order_ref || it.ref_no || null]
+        `INSERT INTO pallet_lines (pallet_id, order_line_id, qty, packed_qty, is_labeled, note, done, ref_no) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [pal.id, it.order_line_id, it.qty, packedQty, isLabeled, note, isDone, it.order_ref || it.ref_no || null]
       );
     }
     await db.runAsync(
@@ -1960,9 +2036,12 @@ export async function restoreDatabaseBackup(backupPayload) {
 
       // 13. Nạp lại pallet_lines (giữ nguyên ID)
       for (const pl of data.pallet_lines) {
+        const isDone = pl.done ?? 0;
+        const packed = pl.packed_qty !== undefined ? num(pl.packed_qty) : (isDone ? num(pl.qty) : 0);
+        const labeled = pl.is_labeled !== undefined ? (pl.is_labeled ? 1 : 0) : isDone;
         await db.runAsync(
-          'INSERT INTO pallet_lines (id, pallet_id, order_line_id, qty, done, ref_no) VALUES (?, ?, ?, ?, ?, ?)',
-          [pl.id, pl.pallet_id, pl.order_line_id, pl.qty ?? 0, pl.done ?? 0, pl.ref_no ?? null]
+          'INSERT INTO pallet_lines (id, pallet_id, order_line_id, qty, packed_qty, is_labeled, note, done, ref_no) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [pl.id, pl.pallet_id, pl.order_line_id, pl.qty ?? 0, packed, labeled, pl.note ?? null, isDone, pl.ref_no ?? null]
         );
       }
 
