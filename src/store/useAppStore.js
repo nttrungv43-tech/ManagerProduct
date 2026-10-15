@@ -376,6 +376,7 @@ export function summaryTotals(items) {
   const totalTarget = items.reduce((s, it) => s + it.target, 0);
   const totalProduced = items.reduce((s, it) => s + it.produced, 0);
   const totalDefect = items.reduce((s, it) => s + it.defect, 0);
+  const totalDefectBox = items.reduce((s, it) => s + (it.defect_box || 0), 0);
   const overallPct = totalTarget ? Math.round((totalProduced / totalTarget) * 1000) / 10 : 0;
-  return { totalTarget, totalProduced, totalDefect, overallPct };
+  return { totalTarget, totalProduced, totalDefect, totalDefectBox, overallPct };
 }

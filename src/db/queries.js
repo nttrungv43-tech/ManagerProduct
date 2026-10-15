@@ -84,6 +84,7 @@ export async function fetchItemsWithStats(batchId) {
       target: num(r.target),
       produced: num(r.produced),
       defect: num(r.defect),
+      defect_box: num(r.defect_box),
       remaining: num(r.remaining),
       nw_kg: r.nw_kg,
       gw_kg: r.gw_kg,
@@ -192,6 +193,7 @@ export async function fetchPoSummaries(batchId) {
     produced: num(r.produced),
     remaining: num(r.remaining),
     defect: num(r.defect),
+    defect_box: num(r.defect_box),
     itemCount: num(r.item_count),
     // Mọi PO đều quy được sản lượng về đúng PO ⇒ không còn dòng nào "chưa biết" (FEAT-20).
     hasShared: false,
@@ -204,7 +206,7 @@ export async function fetchEntriesForLine(orderLineId) {
   if (!orderLineId) return [];
   // FEAT-23: cột `ref_no` = số hiệu đã gắn. `NULL` = nhật ký chưa gắn số hiệu (không bịa ref — AC-RF-07).
   return db.getAllAsync(
-    `SELECT pe.id, pe.date, pe.qty, pe.line, pe.defect_qty, pe.order_line_id,
+    `SELECT pe.id, pe.date, pe.qty, pe.line, pe.defect_qty, pe.defect_box_qty, pe.order_line_id,
             GROUP_CONCAT(pd.type) AS defect_types,
             (SELECT er.ref_no FROM production_entry_refs er WHERE er.entry_id = pe.id) AS ref_no
      FROM production_entries pe
@@ -302,15 +304,16 @@ async function checkRefTarget(db, orderLineId, refNo, qty, excludeEntryId = null
 }
 
 /** Thêm một mục nhật ký sản xuất vào một thẻ (dòng đơn hàng). */
-export async function addEntry(orderLineId, { date, qty, line, defectQty, defectTypes, refNo = null }) {
+export async function addEntry(orderLineId, { date, qty, line, defectQty, defectBoxQty, defectTypes, refNo = null }) {
   const db = await getDb();
   const q = parseQty(qty);
   if (q === null || q <= 0) return fail('INVALID_QTY', { ntk: '' });
   const d = String(date ?? '').trim();
   if (!isValidDate(d)) return fail('INVALID_DATE', { date });
 
-  const lineKind = line === 'auto' ? 'auto' : 'manual';
+  const lineKind = line === 'manual' ? 'manual' : 'auto';
   const defect = Math.max(parseQty(defectQty) ?? 0, 0);
+  const defectBox = Math.max(parseQty(defectBoxQty) ?? 0, 0);
 
   const ok = await checkLineTarget(db, orderLineId, q);
   if (!ok.ok) return fail(ok.code, ok);
@@ -320,11 +323,11 @@ export async function addEntry(orderLineId, { date, qty, line, defectQty, defect
 
   return withTransaction(db, async () => {
     const res = await db.runAsync(
-      `INSERT INTO production_entries (order_line_id, date, qty, line, defect_qty)
-       VALUES (?, ?, ?, ?, ?)`,
-      [orderLineId, d, q, lineKind, defect]
+      `INSERT INTO production_entries (order_line_id, date, qty, line, defect_qty, defect_box_qty)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [orderLineId, d, q, lineKind, defect, defectBox]
     );
-    await writeDefects(db, res.lastInsertRowId, defect, defectTypes);
+    await writeDefects(db, res.lastInsertRowId, defect, defectTypes, defectBox);
     await writeEntryRef(db, res.lastInsertRowId, orderLineId, refNo);
     return done({ id: res.lastInsertRowId });
   });
@@ -341,10 +344,10 @@ async function writeEntryRef(db, entryId, orderLineId, refNo) {
 }
 
 /** Sửa một mục nhật ký. */
-export async function updateEntry(entryId, { date, qty, line, defectQty, defectTypes, refNo = undefined }) {
+export async function updateEntry(entryId, { date, qty, line, defectQty, defectBoxQty, defectTypes, refNo = undefined }) {
   const db = await getDb();
   const cur = await db.getFirstAsync(
-    `SELECT order_line_id FROM production_entries WHERE id = ?`, [entryId]
+    `SELECT order_line_id, line FROM production_entries WHERE id = ?`, [entryId]
   );
   if (!cur) return fail('ENTRY_NOT_FOUND');
 
@@ -368,16 +371,17 @@ export async function updateEntry(entryId, { date, qty, line, defectQty, defectT
   const refOk = await checkRefTarget(db, cur.order_line_id, nextRef, q, entryId);
   if (!refOk.ok) return refOk;
 
-  const lineKind = line === 'auto' ? 'auto' : 'manual';
+  const lineKind = line !== undefined ? (line === 'manual' ? 'manual' : 'auto') : (cur.line ?? 'auto');
   const defect = Math.max(parseQty(defectQty) ?? 0, 0);
+  const defectBox = Math.max(parseQty(defectBoxQty) ?? 0, 0);
 
   return withTransaction(db, async () => {
     await db.runAsync(
-      `UPDATE production_entries SET date = ?, qty = ?, line = ?, defect_qty = ? WHERE id = ?`,
-      [d, q, lineKind, defect, entryId]
+      `UPDATE production_entries SET date = ?, qty = ?, line = ?, defect_qty = ?, defect_box_qty = ? WHERE id = ?`,
+      [d, q, lineKind, defect, defectBox, entryId]
     );
     await db.runAsync(`DELETE FROM production_defects WHERE entry_id = ?`, [entryId]);
-    await writeDefects(db, entryId, defect, defectTypes);
+    await writeDefects(db, entryId, defect, defectTypes, defectBox);
     await setEntryRef(db, entryId, cur.order_line_id, nextRef);
     return done({ id: entryId });
   });
@@ -404,8 +408,8 @@ export async function removeEntry(entryId) {
 }
 
 /** Ghi loại hàng lỗi. Loại sai bị CHECK của DB chặn — ở đây lọc trước để không ném lỗi SQL. */
-async function writeDefects(db, entryId, defectQty, defectTypes) {
-  if (!(defectQty > 0)) return;
+async function writeDefects(db, entryId, defectQty, defectTypes, defectBoxQty = 0) {
+  if (!(defectQty > 0 || defectBoxQty > 0)) return;
   const types = (Array.isArray(defectTypes) ? defectTypes : [])
     .filter(t => ['yellow', 'red', 'tear'].includes(t));
   for (const t of new Set(types)) {
@@ -991,7 +995,8 @@ export async function fetchHistoryGrouped(groupBy, filterValue) {
             COALESCE(SUM(e.qty),0) AS total,
             COALESCE(SUM(CASE WHEN e.line = 'manual' THEN e.qty ELSE 0 END),0) AS manual_total,
             COALESCE(SUM(CASE WHEN e.line = 'auto'   THEN e.qty ELSE 0 END),0) AS auto_total,
-            COALESCE(SUM(e.defect_qty),0) AS defect_total
+            COALESCE(SUM(e.defect_qty),0) AS defect_total,
+            COALESCE(SUM(e.defect_box_qty),0) AS defect_box_total
      FROM production_entries e
      ${where}
      GROUP BY ${expr} ORDER BY group_key DESC`,
@@ -1003,6 +1008,7 @@ export async function fetchHistoryGrouped(groupBy, filterValue) {
     manualTotal: num(r.manual_total),
     autoTotal: num(r.auto_total),
     defectTotal: num(r.defect_total),
+    defectBoxTotal: num(r.defect_box_total),
   }));
 }
 
@@ -1017,7 +1023,8 @@ export async function fetchHistoryDetail(groupBy, groupKey) {
             ol.item_code AS ntk,
             er.ref_no,
             COALESCE(SUM(pe.qty), 0) AS qty,
-            COALESCE(SUM(pe.defect_qty), 0) AS defect_qty
+            COALESCE(SUM(pe.defect_qty), 0) AS defect_qty,
+            COALESCE(SUM(pe.defect_box_qty), 0) AS defect_box_qty
      FROM production_entries pe
      JOIN order_lines ol ON ol.id = pe.order_line_id
      JOIN pos p ON p.id = ol.po_id
@@ -1038,6 +1045,7 @@ export async function fetchHistoryDetail(groupBy, groupKey) {
         ntk: r.ntk,
         qty: 0,
         defect_qty: 0,
+        defect_box_qty: 0,
         refs: [],
         unattributedQty: 0,
       });
@@ -1045,10 +1053,12 @@ export async function fetchHistoryDetail(groupBy, groupKey) {
     const item = grouped.get(r.order_line_id);
     const q = num(r.qty);
     const dq = num(r.defect_qty);
+    const dbq = num(r.defect_box_qty);
     item.qty += q;
     item.defect_qty += dq;
+    item.defect_box_qty += dbq;
     if (r.ref_no) {
-      item.refs.push({ refNo: r.ref_no, qty: q, defect_qty: dq });
+      item.refs.push({ refNo: r.ref_no, qty: q, defect_qty: dq, defect_box_qty: dbq });
     } else {
       item.unattributedQty += q;
     }
@@ -1071,6 +1081,7 @@ export async function fetchHistoryEntries(groupBy, groupKey) {
             pe.qty,
             pe.line,
             pe.defect_qty,
+            pe.defect_box_qty,
             pe.order_line_id,
             ol.item_code AS ntk,
             p.code AS po,
@@ -1092,6 +1103,7 @@ export async function fetchHistoryEntries(groupBy, groupKey) {
     qty: num(r.qty),
     line: r.line,
     defect_qty: num(r.defect_qty),
+    defect_box_qty: num(r.defect_box_qty),
     defect_types: r.defect_types ? r.defect_types.split(',') : [],
     orderLineId: r.order_line_id,
     ntk: r.ntk,
@@ -1189,6 +1201,9 @@ export async function fetchArchives() {
             (SELECT COALESCE(SUM(e.defect_qty),0) FROM production_entries e
                JOIN order_lines l ON l.id = e.order_line_id
                JOIN pos p ON p.id = l.po_id WHERE p.order_batch_id = b.id) AS total_defect,
+            (SELECT COALESCE(SUM(e.defect_box_qty),0) FROM production_entries e
+               JOIN order_lines l ON l.id = e.order_line_id
+               JOIN pos p ON p.id = l.po_id WHERE p.order_batch_id = b.id) AS total_defect_box,
             (SELECT COUNT(*) FROM pallets pa JOIN containers c ON c.id = pa.container_id
                WHERE c.order_batch_id = b.id) AS pallets_total,
             (SELECT COUNT(DISTINCT pl.pallet_id) FROM pallet_lines pl
@@ -1208,6 +1223,7 @@ export async function fetchArchives() {
     total_target: num(r.total_target),
     total_produced: num(r.total_produced),
     total_defect: num(r.total_defect),
+    total_defect_box: num(r.total_defect_box),
     pallets_total: num(r.pallets_total),
     pallets_done: num(r.pallets_done),
   }));
@@ -1221,6 +1237,7 @@ export async function fetchArchiveItems(batchId) {
   ).then(rs => rs.map(r => ({
     order_line_id: r.order_line_id, ntk: r.item_code, po: r.po,
     target: num(r.target), produced: num(r.produced), defect: num(r.defect),
+    defect_box: num(r.defect_box),
     remaining: num(r.remaining),
   })));
 }
@@ -1723,13 +1740,14 @@ export async function importEntriesFromJson(batchId, entries) {
       problems.push(`Dòng ${idx}: ${code} (PO ${po}) vượt hạn mức (đã có ${used}, thêm ${q}, hạn mức ${line.target})`);
     }
     const defect = Math.max(parseQty(e?.defect_qty ?? e?.defectQty) ?? 0, 0);
+    const defectBox = Math.max(parseQty(e?.defect_box_qty ?? e?.defectBoxQty) ?? 0, 0);
     const res = await db.runAsync(
-      `INSERT INTO production_entries (order_line_id, date, qty, line, defect_qty)
-       VALUES (?, ?, ?, ?, ?)`,
-      [lineId, d, q, e?.line === 'auto' ? 'auto' : 'manual', defect]
+      `INSERT INTO production_entries (order_line_id, date, qty, line, defect_qty, defect_box_qty)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [lineId, d, q, e?.line === 'auto' ? 'auto' : 'manual', defect, defectBox]
     );
     const types = String(e?.defect_types ?? e?.defectTypes ?? '').split(',').map(x => x.trim()).filter(Boolean);
-    await writeDefects(db, res.lastInsertRowId, defect, types);
+    await writeDefects(db, res.lastInsertRowId, defect, types, defectBox);
   }
 
   return done({
@@ -1899,8 +1917,8 @@ export async function restoreDatabaseBackup(backupPayload) {
       // 8. Nạp lại production_entries (giữ nguyên ID)
       for (const pe of data.production_entries) {
         await db.runAsync(
-          'INSERT INTO production_entries (id, order_line_id, date, qty, line, defect_qty) VALUES (?, ?, ?, ?, ?, ?)',
-          [pe.id, pe.order_line_id, pe.date, pe.qty, pe.line ?? 'manual', pe.defect_qty ?? 0]
+          'INSERT INTO production_entries (id, order_line_id, date, qty, line, defect_qty, defect_box_qty) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [pe.id, pe.order_line_id, pe.date, pe.qty, pe.line ?? 'manual', pe.defect_qty ?? 0, pe.defect_box_qty ?? 0]
         );
       }
 

@@ -9,6 +9,11 @@ export default function EntryLogRow({ entry, po, onEdit, onDelete, theme }) {
   // FEAT-23: số hiệu đã gắn. Rỗng ⇒ nhật ký nhập bằng form gốc, **không bịa** ref (AC-RF-07).
   const refLabelText = (entry.ref_no || '').trim();
 
+  const defectParts = [];
+  if (entry.defect_qty > 0) defectParts.push(`${entry.defect_qty} pcs`);
+  if (entry.defect_box_qty > 0) defectParts.push(`${entry.defect_box_qty} thùng`);
+  const defectText = defectParts.length ? ` · Lỗi: ${defectParts.join(', ')}` : '';
+
   return (
     <View style={[styles.row, { borderTopColor: theme.line }]}>
       <Text style={{ color: theme.sub, fontSize: 12, flex: 1 }}>
@@ -18,7 +23,7 @@ export default function EntryLogRow({ entry, po, onEdit, onDelete, theme }) {
             luôn hiện "chưa gắn PO", tức sai. */}
         {po ? ` · PO ${po}` : ''}
         {refLabelText ? ` · ${refLabelText}` : ' · chưa gắn số hiệu'}
-        {entry.defect_qty > 0 ? ` · Lỗi ${entry.defect_qty}` : ''}
+        {defectText}
         {defectTypes.length ? ` (${defectTypes.map(t => typeLabels[t]).join(', ')})` : ''}
       </Text>
       <View style={{ flexDirection: 'row', gap: 10 }}>

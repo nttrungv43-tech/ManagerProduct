@@ -42,7 +42,10 @@ export default function ArchiveCard({ archive, theme, expanded, onToggle, onDele
           )}
           <Text style={{ color: theme.sub, fontSize: 11.5, marginTop: 3 }}>
             {(archive.total_produced ?? 0).toLocaleString('vi-VN')}/{(archive.total_target ?? 0).toLocaleString('vi-VN')} pcs ·{' '}
-            {archive.pallets_done ?? 0}/{archive.pallets_total ?? 0} kiện · Lỗi {(archive.total_defect ?? 0).toLocaleString('vi-VN')}
+            {archive.pallets_done ?? 0}/{archive.pallets_total ?? 0} kiện · Lỗi {[
+              archive.total_defect > 0 ? `${(archive.total_defect ?? 0).toLocaleString('vi-VN')} pcs` : null,
+              archive.total_defect_box > 0 ? `${(archive.total_defect_box ?? 0).toLocaleString('vi-VN')} thùng` : null,
+            ].filter(Boolean).join(', ') || '0'}
           </Text>
         </View>
         <View style={styles.actions}>
@@ -75,7 +78,12 @@ export default function ArchiveCard({ archive, theme, expanded, onToggle, onDele
               </Text>
               <Text style={{ color: theme.sub, fontSize: 12.5 }}>
                 {(it.produced ?? 0).toLocaleString('vi-VN')}/{(it.target ?? 0).toLocaleString('vi-VN')} pcs
-                {it.defect > 0 ? ` · Lỗi ${it.defect.toLocaleString('vi-VN')}` : ''}
+                {Boolean(it.defect > 0 || it.defect_box > 0)
+                  ? ` · Lỗi ${[
+                      it.defect > 0 ? `${it.defect.toLocaleString('vi-VN')} pcs` : null,
+                      it.defect_box > 0 ? `${it.defect_box.toLocaleString('vi-VN')} thùng` : null,
+                    ].filter(Boolean).join(', ')}`
+                  : ''}
               </Text>
             </View>
           ))}

@@ -42,6 +42,7 @@ try {
     qty: 120,
     line: 'manual',
     defectQty: 3,
+    defectBoxQty: 1,
     defectTypes: ['yellow', 'tear'],
   });
   check('thêm lượt 1 thành công', addRes1.ok, JSON.stringify(addRes1.error));
@@ -52,6 +53,7 @@ try {
     qty: 80,
     line: 'auto',
     defectQty: 0,
+    defectBoxQty: 0,
   });
   check('thêm lượt 2 thành công', addRes2.ok, JSON.stringify(addRes2.error));
   const entryId2 = addRes2.id;
@@ -70,6 +72,7 @@ try {
   eq('lượt 1: số lượng 120 pcs', e1.qty, 120);
   eq('lượt 1: chuyền manual', e1.line, 'manual');
   eq('lượt 1: số lỗi 3', e1.defect_qty, 3);
+  eq('lượt 1: số thùng lỗi 1', e1.defect_box_qty, 1);
   check('lượt 1: có thẻ yellow', e1.defect_types.includes('yellow'));
   check('lượt 1: có thẻ tear', e1.defect_types.includes('tear'));
 
@@ -77,6 +80,13 @@ try {
   check('tìm thấy lượt 2', !!e2);
   eq('lượt 2: số lượng 80 pcs', e2.qty, 80);
   eq('lượt 2: chuyền auto', e2.line, 'auto');
+
+  // Kiểm tra khi không truyền `line`, mặc định phải là chuyền tự động ('auto')
+  const addResDef = await q.addEntry(orderLineId, { date: '2026-10-15', qty: 20 });
+  check('thêm lượt không truyền line thành công', addResDef.ok);
+  const eDef = (await q.fetchHistoryEntries('day', '2026-10-15')).find(e => e.id === addResDef.id);
+  eq('không truyền line thì mặc định là chuyền auto', eDef?.line, 'auto');
+  await q.removeEntry(addResDef.id);
 
   // Kiểm tra theo tháng (month)
   const monthEntries = await q.fetchHistoryEntries('month', '2026-10');
@@ -92,17 +102,19 @@ try {
   eq('tổng ngày 2026-10-15 = 200 pcs', dGroup?.total, 200);
   eq('thủ công = 120', dGroup?.manualTotal, 120);
   eq('tự động = 80', dGroup?.autoTotal, 80);
-  eq('lỗi = 3', dGroup?.defectTotal, 3);
+  eq('lỗi sp = 3', dGroup?.defectTotal, 3);
+  eq('lỗi thùng = 1', dGroup?.defectBoxTotal, 1);
 
   // ══════════════════════════════════════════════════════════════════════
   console.log('\n3) SỬA LỊCH SỬ SẢN XUẤT (updateEntry)');
   // ══════════════════════════════════════════════════════════════════════
-  // Sửa lượt 1: đổi ngày sang 2026-10-16, đổi số lượng thành 150 pcs, chuyền auto, lỗi 1 red
+  // Sửa lượt 1: đổi ngày sang 2026-10-16, đổi số lượng thành 150 pcs, chuyền auto, lỗi 1 sp, 2 thùng red
   const updateRes = await q.updateEntry(entryId1, {
     date: '2026-10-16',
     qty: 150,
     line: 'auto',
     defectQty: 1,
+    defectBoxQty: 2,
     defectTypes: ['red'],
   });
   check('sửa lượt 1 thành công', updateRes.ok, JSON.stringify(updateRes.error));
@@ -117,7 +129,8 @@ try {
   eq('ngày 16 có 1 lượt', day16Entries.length, 1);
   eq('ngày 16 số lượng = 150 pcs', day16Entries[0]?.qty, 150);
   eq('ngày 16 chuyền = auto', day16Entries[0]?.line, 'auto');
-  eq('ngày 16 lỗi = 1', day16Entries[0]?.defect_qty, 1);
+  eq('ngày 16 lỗi sp = 1', day16Entries[0]?.defect_qty, 1);
+  eq('ngày 16 lỗi thùng = 2', day16Entries[0]?.defect_box_qty, 2);
   check('ngày 16 loại lỗi red', day16Entries[0]?.defect_types.includes('red'));
 
   // ══════════════════════════════════════════════════════════════════════

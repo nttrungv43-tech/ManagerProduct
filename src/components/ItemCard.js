@@ -1,6 +1,5 @@
 import React, { useState, useRef } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Keyboard } from 'react-native';
-import { Picker } from '@react-native-picker/picker';
 import { Ionicons } from '@expo/vector-icons';
 import ProgressBar from '@/components/ProgressBar';
 import EntryLogRow from '@/components/EntryLogRow';
@@ -90,8 +89,9 @@ export default function ItemCard({
   const [expanded, setExpanded] = useState(false);
   const [selectedDate, setSelectedDate] = useState(todayLocal());
   const [qty, setQty] = useState('');
-  const [line, setLine] = useState('manual');
+  const [line, setLine] = useState('auto');
   const [defectQty, setDefectQty] = useState('');
+  const [defectBoxQty, setDefectBoxQty] = useState('');
   const [defectTypes, setDefectTypes] = useState({ yellow: false, red: false, tear: false });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittingRef, setSubmittingRef] = useState(null);
@@ -116,6 +116,7 @@ export default function ItemCard({
   const [editQty, setEditQty] = useState('');
   const [editLine, setEditLine] = useState('manual');
   const [editDefectQty, setEditDefectQty] = useState('');
+  const [editDefectBoxQty, setEditDefectBoxQty] = useState('');
   const [editDefectTypes, setEditDefectTypes] = useState({ yellow: false, red: false, tear: false });
 
   const produced = item.produced || 0;
@@ -159,6 +160,7 @@ export default function ItemCard({
   // State for ref input form (per ref)
   const [refQty, setRefQty] = useState({});
   const [refDefectQty, setRefDefectQty] = useState({});
+  const [refDefectBoxQty, setRefDefectBoxQty] = useState({});
   const [refLine, setRefLine] = useState({});
   const [refDefectTypes, setRefDefectTypes] = useState({});
 
@@ -167,6 +169,9 @@ export default function ItemCard({
   }
   function setRefDefectQtyFor(refNo, value) {
     setRefDefectQty(prev => ({ ...prev, [`${REF_KEY_PREFIX}${refNo}`]: value }));
+  }
+  function setRefDefectBoxQtyFor(refNo, value) {
+    setRefDefectBoxQty(prev => ({ ...prev, [`${REF_KEY_PREFIX}${refNo}`]: value }));
   }
   function setRefLineFor(refNo, value) {
     setRefLine(prev => ({ ...prev, [`${REF_KEY_PREFIX}${refNo}`]: value }));
@@ -199,11 +204,13 @@ export default function ItemCard({
     const key = `${REF_KEY_PREFIX}${refNo}`;
     const qRes = readNumber(refQty[key] ?? '');
     const dRes = readNumber(refDefectQty[key] ?? '');
-    if (qRes.invalid || dRes.invalid) { showInvalidQty(); return; }
+    const dbRes = readNumber(refDefectBoxQty[key] ?? '');
+    if (qRes.invalid || dRes.invalid || dbRes.invalid) { showInvalidQty(); return; }
 
     const q = qRes.value;
     const dq = dRes.value;
-    if (q <= 0 && dq <= 0) return;
+    const dbq = dbRes.value;
+    if (q <= 0 && dq <= 0 && dbq <= 0) return;
 
     // Client-side validation: check ref target before calling DB
     if (q > 0 && !validateQtyBeforeAdd(q, entry.target, entry.produced, 'Vượt kế hoạch số hiệu')) {
@@ -213,14 +220,14 @@ export default function ItemCard({
     setSubmittingRef(refNo);
     try {
       const types = Object.keys(refDefectTypes[key] || {}).filter(k => refDefectTypes[key][k]);
-      const lineVal = refLine[key] || 'manual';
-
+      const lineVal = refLine[key] || 'auto';
       const res = await onAddEntry(item.order_line_id, {
         date: selectedDate || todayLocal(),
         qty: q,
         line: lineVal,
         defectQty: dq,
-        defectTypes: dq > 0 ? types : [],
+        defectBoxQty: dbq,
+        defectTypes: (dq > 0 || dbq > 0) ? types : [],
         refNo,
       });
       if (res && res.ok === false) {
@@ -234,6 +241,7 @@ export default function ItemCard({
       // Xử lý xong: ô nhập liệu trở về trạng thái trống như ban đầu
       setRefQtyFor(refNo, '');
       setRefDefectQtyFor(refNo, '');
+      setRefDefectBoxQtyFor(refNo, '');
       setRefDefectTypesFor(refNo, { yellow: false, red: false, tear: false });
       Keyboard.dismiss();
 
@@ -259,11 +267,13 @@ export default function ItemCard({
   async function handleAdd() {
     const qRes = readNumber(qty);
     const dRes = readNumber(defectQty);
-    if (qRes.invalid || dRes.invalid) { showInvalidQty(); return; }
+    const dbRes = readNumber(defectBoxQty);
+    if (qRes.invalid || dRes.invalid || dbRes.invalid) { showInvalidQty(); return; }
 
     const q = qRes.value;
     const dq = dRes.value;
-    if (q <= 0 && dq <= 0) return;
+    const dbq = dbRes.value;
+    if (q <= 0 && dq <= 0 && dbq <= 0) return;
 
     // Client-side validation: check total target before calling DB
     if (q > 0 && !validateQtyBeforeAdd(q, item.target, produced, OVER_TARGET_TITLE)) {
@@ -275,13 +285,18 @@ export default function ItemCard({
       const types = Object.keys(defectTypes).filter(k => defectTypes[k]);
       const res = await onAddEntry(item.order_line_id, {
         date: selectedDate || todayLocal(),
-        qty: q, line, defectQty: dq, defectTypes: dq > 0 ? types : [],
+        qty: q,
+        line: line || 'auto',
+        defectQty: dq,
+        defectBoxQty: dbq,
+        defectTypes: (dq > 0 || dbq > 0) ? types : [],
       });
       // Vượt đơn đặt hàng: giữ nguyên ô nhập để người dùng sửa lại.
       if (res && res.ok === false) { showOverTarget(res.error); return; }
       // Xử lý xong: ô nhập liệu trở về trạng thái trống như ban đầu
       setQty('');
       setDefectQty('');
+      setDefectBoxQty('');
       setDefectTypes({ yellow: false, red: false, tear: false });
       qtyInputRef.current?.blur();
       defectQtyInputRef.current?.blur();
@@ -316,8 +331,9 @@ export default function ItemCard({
     setEditingId(entry.id);
     setEditDate(entry.date || '');
     setEditQty(String(entry.qty || 0));
-    setEditLine(entry.line || 'manual');
-    setEditDefectQty(String(entry.defect_qty || 0));
+    setEditLine(entry.line || 'auto');
+    setEditDefectQty(String(entry.defect_qty || ''));
+    setEditDefectBoxQty(String(entry.defect_box_qty || ''));
     const types = { yellow: false, red: false, tear: false };
     (entry.defect_types || '').split(',').filter(Boolean).forEach(t => {
       if (types.hasOwnProperty(t)) types[t] = true;
@@ -330,17 +346,20 @@ export default function ItemCard({
     setEditDate('');
     setEditQty('');
     setEditDefectQty('');
+    setEditDefectBoxQty('');
     setEditDefectTypes({ yellow: false, red: false, tear: false });
   }
 
   async function handleEditSave() {
     const qRes = readNumber(editQty);
     const dRes = readNumber(editDefectQty);
-    if (qRes.invalid || dRes.invalid) { showInvalidQty(); return; }
+    const dbRes = readNumber(editDefectBoxQty);
+    if (qRes.invalid || dRes.invalid || dbRes.invalid) { showInvalidQty(); return; }
 
     const q = qRes.value;
     const dq = dRes.value;
-    if (q <= 0 && dq <= 0) {
+    const dbq = dbRes.value;
+    if (q <= 0 && dq <= 0 && dbq <= 0) {
       handleEditCancel();
       return;
     }
@@ -350,7 +369,8 @@ export default function ItemCard({
       qty: q,
       line: editLine,
       defectQty: dq,
-      defectTypes: dq > 0 ? types : [],
+      defectBoxQty: dbq,
+      defectTypes: (dq > 0 || dbq > 0) ? types : [],
     };
     Alert.alert('Xác nhận', 'Lưu thay đổi cho nhật ký này?', [
       { text: 'Huỷ', style: 'cancel' },
@@ -458,8 +478,10 @@ export default function ItemCard({
         <Text style={styles.numValue(theme)}>{produced.toLocaleString('vi-VN')}</Text>
         <Text style={styles.numLabel(theme)}>Còn lại:</Text>
         <Text style={styles.numValue(theme)}>{remaining.toLocaleString('vi-VN')}</Text>
-        <Text style={styles.numLabel(theme)}>Lỗi:</Text>
+        <Text style={styles.numLabel(theme)}>SP lỗi:</Text>
         <Text style={styles.numValueBad(theme)}>{(item.defect || 0).toLocaleString('vi-VN')}</Text>
+        <Text style={styles.numLabel(theme)}>Thùng lỗi:</Text>
+        <Text style={styles.numValueBad(theme)}>{(item.defect_box || 0).toLocaleString('vi-VN')}</Text>
       </View>
 
       {/* FEAT-17 (AC-NEW-05/06): 4 trường từ packing list. FEAT-22: chỉ còn `Kiện` — `KL`/`TKL`/
@@ -527,97 +549,174 @@ export default function ItemCard({
                   <Text style={{ color: theme.accent, fontWeight: '700' }}>PO {item.po}</Text>
                 </Text>
               </View>
-              <TextInput
-                ref={qtyInputRef}
-                editable={!isSubmitting}
-                style={[
-                  styles.input(theme),
-                  focusedKey === 'main_qty' && { borderColor: theme.accent, borderWidth: 2 },
-                  isSubmitting && { opacity: 0.7 },
-                ]}
-                keyboardType="numeric"
-                placeholder="Số lượng sản xuất"
-                placeholderTextColor={theme.sub}
-                value={qty}
-                onChangeText={setQty}
-                onFocus={() => {
-                  setFocusedKey('main_qty');
-                  handleFocus(mainInputWrapRef);
-                }}
-                onBlur={() => setFocusedKey(null)}
-              />
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                <View style={[styles.pickerWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
-                  <Picker
-                    selectedValue={line}
-                    onValueChange={setLine}
-                    style={{ color: theme.ink }}
-                    enabled={!isSubmitting}
+              {/* Chọn chuyền sản xuất */}
+              <View style={styles.lineSelectRow}>
+                <Text style={[styles.lineSelectLabel, { color: theme.sub }]}>Chuyền sản xuất:</Text>
+                <View style={[styles.lineToggleWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
+                  <TouchableOpacity
+                    style={[
+                      styles.lineToggleBtn,
+                      line === 'auto' && [styles.lineToggleBtnActive, { backgroundColor: theme.accent }],
+                    ]}
+                    onPress={() => setLine('auto')}
+                    disabled={isSubmitting}
                   >
-                    <Picker.Item label="Thủ công" value="manual" />
-                    <Picker.Item label="Tự động" value="auto" />
-                  </Picker>
+                    <Ionicons
+                      name="flash"
+                      size={13}
+                      color={line === 'auto' ? '#fff' : theme.sub}
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text
+                      style={[
+                        styles.lineToggleText,
+                        { color: line === 'auto' ? '#fff' : theme.ink, fontWeight: line === 'auto' ? '700' : '500' },
+                      ]}
+                    >
+                      Tự động
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.lineToggleBtn,
+                      line === 'manual' && [styles.lineToggleBtnActive, { backgroundColor: theme.accent }],
+                    ]}
+                    onPress={() => setLine('manual')}
+                    disabled={isSubmitting}
+                  >
+                    <Ionicons
+                      name="construct"
+                      size={13}
+                      color={line === 'manual' ? '#fff' : theme.sub}
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text
+                      style={[
+                        styles.lineToggleText,
+                        { color: line === 'manual' ? '#fff' : theme.ink, fontWeight: line === 'manual' ? '700' : '500' },
+                      ]}
+                    >
+                      Thủ công
+                    </Text>
+                  </TouchableOpacity>
                 </View>
-                <TouchableOpacity
+              </View>
+              {/* Nhập SL sản xuất */}
+              <View style={{ marginBottom: 10 }}>
+                <Text style={styles.sectionLabel(theme)}>Số lượng sản xuất (pcs)</Text>
+                <TextInput
+                  ref={qtyInputRef}
+                  editable={!isSubmitting}
                   style={[
-                    styles.addBtn,
-                    {
-                      backgroundColor: theme.accent,
-                      opacity: isSubmitting ? 0.7 : 1,
-                      flexDirection: 'row',
-                      gap: 6,
-                    },
+                    styles.input(theme),
+                    focusedKey === 'main_qty' && { borderColor: theme.accent, borderWidth: 2 },
+                    isSubmitting && { opacity: 0.7 },
                   ]}
-                  onPress={handleAdd}
-                  disabled={isSubmitting}
-                >
-                  {isSubmitting ? (
-                    <>
-                      <ActivityIndicator size="small" color="#fff" />
-                      <Text style={{ color: '#fff', fontWeight: '700' }}>Đang thêm...</Text>
-                    </>
-                  ) : (
-                    <Text style={{ color: '#fff', fontWeight: '700' }}>Thêm</Text>
-                  )}
-                </TouchableOpacity>
+                  keyboardType="numeric"
+                  placeholder="Số lượng sản xuất (pcs)"
+                  placeholderTextColor={theme.sub}
+                  value={qty}
+                  onChangeText={setQty}
+                  onFocus={() => {
+                    setFocusedKey('main_qty');
+                    handleFocus(mainInputWrapRef);
+                  }}
+                  onBlur={() => setFocusedKey(null)}
+                />
               </View>
 
-              <Text style={styles.sectionLabel(theme)}>Hàng lỗi (không bắt buộc)</Text>
-              <TextInput
-                ref={defectQtyInputRef}
-                editable={!isSubmitting}
-                style={[
-                  styles.input(theme),
-                  focusedKey === 'main_defect' && { borderColor: theme.accent, borderWidth: 2 },
-                  isSubmitting && { opacity: 0.7 },
-                ]}
-                keyboardType="numeric"
-                placeholder="Số lượng hàng lỗi"
-                placeholderTextColor={theme.sub}
-                value={defectQty}
-                onChangeText={setDefectQty}
-                onFocus={() => {
-                  setFocusedKey('main_defect');
-                  handleFocus(mainInputWrapRef);
-                }}
-                onBlur={() => setFocusedKey(null)}
-              />
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-                {[['yellow', 'Thẻ vàng'], ['red', 'Thẻ đỏ'], ['tear', 'Rách bọc']].map(([key, label]) => {
-                  const chipColor = key === 'yellow' ? '#FFD600' : key === 'red' ? '#E53935' : '#FFFFFF';
-                  const textColor = key === 'tear' ? '#333' : '#FFFFFF';
-                  return (
-                    <TouchableOpacity
-                      key={key}
-                      disabled={isSubmitting}
-                      style={[styles.defectChip, { borderColor: theme.line, backgroundColor: defectTypes[key] ? chipColor : theme.card }]}
-                      onPress={() => setDefectTypes(prev => ({ ...prev, [key]: !prev[key] }))}
-                    >
-                      <Text style={{ color: defectTypes[key] ? textColor : theme.sub, fontSize: 12.5 }}>{label}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
+              {/* Nhập hàng lỗi: cả Sản phẩm lỗi và Thùng lỗi */}
+              <View style={{ marginBottom: 12 }}>
+                <Text style={styles.sectionLabel(theme)}>Hàng lỗi (không bắt buộc)</Text>
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: theme.sub, fontSize: 11.5, marginBottom: 4, fontWeight: '600' }}>SP lỗi (pcs):</Text>
+                    <TextInput
+                      ref={defectQtyInputRef}
+                      editable={!isSubmitting}
+                      style={[
+                        styles.input(theme),
+                        focusedKey === 'main_defect' && { borderColor: theme.accent, borderWidth: 2 },
+                        isSubmitting && { opacity: 0.7 },
+                      ]}
+                      keyboardType="numeric"
+                      placeholder="SL SP lỗi (pcs)"
+                      placeholderTextColor={theme.sub}
+                      value={defectQty}
+                      onChangeText={setDefectQty}
+                      onFocus={() => {
+                        setFocusedKey('main_defect');
+                        handleFocus(mainInputWrapRef);
+                      }}
+                      onBlur={() => setFocusedKey(null)}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: theme.sub, fontSize: 11.5, marginBottom: 4, fontWeight: '600' }}>Thùng lỗi (thùng):</Text>
+                    <TextInput
+                      editable={!isSubmitting}
+                      style={[
+                        styles.input(theme),
+                        focusedKey === 'main_defect_box' && { borderColor: theme.accent, borderWidth: 2 },
+                        isSubmitting && { opacity: 0.7 },
+                      ]}
+                      keyboardType="numeric"
+                      placeholder="SL thùng lỗi"
+                      placeholderTextColor={theme.sub}
+                      value={defectBoxQty}
+                      onChangeText={setDefectBoxQty}
+                      onFocus={() => {
+                        setFocusedKey('main_defect_box');
+                        handleFocus(mainInputWrapRef);
+                      }}
+                      onBlur={() => setFocusedKey(null)}
+                    />
+                  </View>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                  {[['yellow', 'Thẻ vàng'], ['red', 'Thẻ đỏ'], ['tear', 'Rách bọc']].map(([key, label]) => {
+                    const chipColor = key === 'yellow' ? '#FFD600' : key === 'red' ? '#E53935' : '#FFFFFF';
+                    const textColor = key === 'tear' ? '#333' : '#FFFFFF';
+                    return (
+                      <TouchableOpacity
+                        key={key}
+                        disabled={isSubmitting}
+                        style={[styles.defectChip, { borderColor: theme.line, backgroundColor: defectTypes[key] ? chipColor : theme.card }]}
+                        onPress={() => setDefectTypes(prev => ({ ...prev, [key]: !prev[key] }))}
+                      >
+                        <Text style={{ color: defectTypes[key] ? textColor : theme.sub, fontSize: 12.5 }}>{label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
               </View>
+
+              {/* Nút thêm lượt sản xuất */}
+              <TouchableOpacity
+                style={[
+                  styles.addBtn,
+                  {
+                    backgroundColor: theme.accent,
+                    opacity: isSubmitting ? 0.7 : 1,
+                    flexDirection: 'row',
+                    gap: 6,
+                    height: 48,
+                    width: '100%',
+                    marginTop: 4,
+                  },
+                ]}
+                onPress={handleAdd}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <>
+                    <ActivityIndicator size="small" color="#fff" />
+                    <Text style={{ color: '#fff', fontWeight: '700' }}>Đang thêm...</Text>
+                  </>
+                ) : (
+                  <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>＋ Thêm lượt sản xuất</Text>
+                )}
+              </TouchableOpacity>
             </View>
           )}
 
@@ -649,7 +748,7 @@ export default function ItemCard({
 
               {refProgress.map(entry => {
                 const key = `${REF_KEY_PREFIX}${entry.ref_no}`;
-                const lineForRef = refLine[key] || 'manual';
+                const lineForRef = refLine[key] || 'auto';
                 const defectTypesForRef = refDefectTypes[key] || { yellow: false, red: false, tear: false };
                 const isRefBusy = submittingRef === entry.ref_no;
 
@@ -739,7 +838,40 @@ export default function ItemCard({
                       </View>
                     </View>
 
-                    {/* Dòng 1: Nhập SL sản xuất + Chọn Chuyền + Nút Thêm */}
+                    {/* Chọn chuyền sản xuất cho ref */}
+                    <View style={styles.refLineSelectRow}>
+                      <Text style={[styles.refLineSelectLabel, { color: theme.sub }]}>Chuyền:</Text>
+                      <View style={[styles.refLineToggleWrap, { borderColor: theme.line, backgroundColor: theme.card }]}>
+                        <TouchableOpacity
+                          style={[
+                            styles.refLineToggleBtn,
+                            lineForRef === 'auto' && [styles.refLineToggleBtnActive, { backgroundColor: theme.accent }],
+                          ]}
+                          onPress={() => setRefLineFor(entry.ref_no, 'auto')}
+                          disabled={isRefBusy}
+                        >
+                          <Ionicons name="flash" size={11} color={lineForRef === 'auto' ? '#fff' : theme.sub} style={{ marginRight: 3 }} />
+                          <Text style={[styles.refLineToggleText, { color: lineForRef === 'auto' ? '#fff' : theme.ink, fontWeight: lineForRef === 'auto' ? '700' : '500' }]}>
+                            Tự động
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[
+                            styles.refLineToggleBtn,
+                            lineForRef === 'manual' && [styles.refLineToggleBtnActive, { backgroundColor: theme.accent }],
+                          ]}
+                          onPress={() => setRefLineFor(entry.ref_no, 'manual')}
+                          disabled={isRefBusy}
+                        >
+                          <Ionicons name="construct" size={11} color={lineForRef === 'manual' ? '#fff' : theme.sub} style={{ marginRight: 3 }} />
+                          <Text style={[styles.refLineToggleText, { color: lineForRef === 'manual' ? '#fff' : theme.ink, fontWeight: lineForRef === 'manual' ? '700' : '500' }]}>
+                            Thủ công
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+
+                    {/* Dòng 1: Nhập SL sản xuất + Nút Thêm */}
                     <View style={styles.refInputMainRow}>
                       <TextInput
                         editable={!isRefBusy}
@@ -754,7 +886,7 @@ export default function ItemCard({
                           isRefBusy && { opacity: 0.7 },
                         ]}
                         keyboardType="numeric"
-                        placeholder="SL sản xuất"
+                        placeholder="SL sản xuất (pcs)"
                         placeholderTextColor={theme.sub}
                         value={refQty[key] ?? ''}
                         onChangeText={v => setRefQtyFor(entry.ref_no, v)}
@@ -764,17 +896,6 @@ export default function ItemCard({
                         }}
                         onBlur={() => setFocusedKey(null)}
                       />
-                      <View style={[styles.refPickerWrap, { borderColor: theme.line, backgroundColor: theme.card }]}>
-                        <Picker
-                          selectedValue={lineForRef}
-                          onValueChange={v => setRefLineFor(entry.ref_no, v)}
-                          style={{ color: theme.ink, width: 110 }}
-                          enabled={!isRefBusy}
-                        >
-                          <Picker.Item label="Thủ công" value="manual" />
-                          <Picker.Item label="Tự động" value="auto" />
-                        </Picker>
-                      </View>
                       <TouchableOpacity
                         style={[
                           styles.refAddBtn,
@@ -794,12 +915,12 @@ export default function ItemCard({
                       </TouchableOpacity>
                     </View>
 
-                    {/* Dòng 2: Nhập SL lỗi + Loại lỗi */}
-                    <View style={styles.refDefectRow}>
+                    {/* Dòng 2: Nhập số lượng lỗi (SP lỗi pcs + Thùng lỗi) */}
+                    <View style={styles.refDefectInputsRow}>
                       <TextInput
                         editable={!isRefBusy}
                         style={[
-                          styles.refInputDefect,
+                          styles.refInputDefectHalf,
                           {
                             borderColor: focusedKey === `${key}:defect` ? theme.accent : theme.line,
                             backgroundColor: theme.card,
@@ -809,7 +930,7 @@ export default function ItemCard({
                           isRefBusy && { opacity: 0.7 },
                         ]}
                         keyboardType="numeric"
-                        placeholder="SL lỗi"
+                        placeholder="SP lỗi (pcs)"
                         placeholderTextColor={theme.sub}
                         value={refDefectQty[key] ?? ''}
                         onChangeText={v => setRefDefectQtyFor(entry.ref_no, v)}
@@ -819,39 +940,64 @@ export default function ItemCard({
                         }}
                         onBlur={() => setFocusedKey(null)}
                       />
-                      <View style={styles.refDefectChips}>
-                        {[
-                          ['yellow', 'Thẻ vàng', '#FFD600', '#333'],
-                          ['red', 'Thẻ đỏ', '#E53935', '#fff'],
-                          ['tear', 'Rách bọc', '#FFFFFF', '#333'],
-                        ].map(([dKey, dLabel, chipColor, textColor]) => {
-                          const active = !!defectTypesForRef[dKey];
-                          return (
-                            <TouchableOpacity
-                              key={dKey}
-                              disabled={isRefBusy}
-                              style={[
-                                styles.refDefectChip,
-                                {
-                                  borderColor: active ? chipColor : theme.line,
-                                  backgroundColor: active ? chipColor : theme.card,
-                                },
-                              ]}
-                              onPress={() => setRefDefectTypesFor(entry.ref_no, { ...defectTypesForRef, [dKey]: !active })}
+                      <TextInput
+                        editable={!isRefBusy}
+                        style={[
+                          styles.refInputDefectHalf,
+                          {
+                            borderColor: focusedKey === `${key}:defect_box` ? theme.accent : theme.line,
+                            backgroundColor: theme.card,
+                            color: theme.ink,
+                          },
+                          focusedKey === `${key}:defect_box` && { borderWidth: 2 },
+                          isRefBusy && { opacity: 0.7 },
+                        ]}
+                        keyboardType="numeric"
+                        placeholder="Thùng lỗi"
+                        placeholderTextColor={theme.sub}
+                        value={refDefectBoxQty[key] ?? ''}
+                        onChangeText={v => setRefDefectBoxQtyFor(entry.ref_no, v)}
+                        onFocus={() => {
+                          setFocusedKey(`${key}:defect_box`);
+                          handleFocus(refCardMap.current[entry.ref_no]);
+                        }}
+                        onBlur={() => setFocusedKey(null)}
+                      />
+                    </View>
+
+                    {/* Dòng 3: Loại lỗi */}
+                    <View style={styles.refDefectChipsRow}>
+                      {[
+                        ['yellow', 'Thẻ vàng', '#FFD600', '#333'],
+                        ['red', 'Thẻ đỏ', '#E53935', '#fff'],
+                        ['tear', 'Rách bọc', '#FFFFFF', '#333'],
+                      ].map(([dKey, dLabel, chipColor, textColor]) => {
+                        const active = !!defectTypesForRef[dKey];
+                        return (
+                          <TouchableOpacity
+                            key={dKey}
+                            disabled={isRefBusy}
+                            style={[
+                              styles.refDefectChip,
+                              {
+                                borderColor: active ? chipColor : theme.line,
+                                backgroundColor: active ? chipColor : theme.card,
+                              },
+                            ]}
+                            onPress={() => setRefDefectTypesFor(entry.ref_no, { ...defectTypesForRef, [dKey]: !active })}
+                          >
+                            <Text
+                              style={{
+                                color: active ? textColor : theme.sub,
+                                fontSize: 11,
+                                fontWeight: active ? '700' : '500',
+                              }}
                             >
-                              <Text
-                                style={{
-                                  color: active ? textColor : theme.sub,
-                                  fontSize: 11,
-                                  fontWeight: active ? '700' : '500',
-                                }}
-                              >
-                                {dLabel}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
+                              {dLabel}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
                     </View>
                   </View>
                 );
@@ -905,34 +1051,78 @@ export default function ItemCard({
                           onChangeText={setEditQty}
                           onFocus={() => handleFocus(editLogWrapRef)}
                         />
-                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                          <View style={[styles.pickerWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
-                            <Picker selectedValue={editLine} onValueChange={setEditLine} style={{ color: theme.ink }}>
-                              <Picker.Item label="Thủ công" value="manual" />
-                              <Picker.Item label="Tự động" value="auto" />
-                            </Picker>
+                        {/* Chọn chuyền khi sửa nhật ký */}
+                        <View style={[styles.lineSelectRow, { marginTop: 8 }]}>
+                          <Text style={[styles.lineSelectLabel, { color: theme.sub }]}>Chuyền sản xuất:</Text>
+                          <View style={[styles.lineToggleWrap, { borderColor: theme.line, backgroundColor: theme.bg }]}>
+                            <TouchableOpacity
+                              style={[
+                                styles.lineToggleBtn,
+                                editLine === 'auto' && [styles.lineToggleBtnActive, { backgroundColor: theme.accent }],
+                              ]}
+                              onPress={() => setEditLine('auto')}
+                            >
+                              <Ionicons name="flash" size={13} color={editLine === 'auto' ? '#fff' : theme.sub} style={{ marginRight: 4 }} />
+                              <Text style={[styles.lineToggleText, { color: editLine === 'auto' ? '#fff' : theme.ink, fontWeight: editLine === 'auto' ? '700' : '500' }]}>
+                                Tự động
+                              </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[
+                                styles.lineToggleBtn,
+                                editLine === 'manual' && [styles.lineToggleBtnActive, { backgroundColor: theme.accent }],
+                              ]}
+                              onPress={() => setEditLine('manual')}
+                            >
+                              <Ionicons name="construct" size={13} color={editLine === 'manual' ? '#fff' : theme.sub} style={{ marginRight: 4 }} />
+                              <Text style={[styles.lineToggleText, { color: editLine === 'manual' ? '#fff' : theme.ink, fontWeight: editLine === 'manual' ? '700' : '500' }]}>
+                                Thủ công
+                              </Text>
+                            </TouchableOpacity>
                           </View>
                         </View>
                         <Text style={styles.sectionLabel(theme)}>Hàng lỗi (không bắt buộc)</Text>
-                        <TextInput
-                          style={styles.input(theme)}
-                          keyboardType="numeric"
-                          placeholder="Số lượng hàng lỗi"
-                          placeholderTextColor={theme.sub}
-                          value={editDefectQty}
-                          onChangeText={setEditDefectQty}
-                          onFocus={() => handleFocus(editLogWrapRef)}
-                        />
+                        <View style={{ flexDirection: 'row', gap: 10 }}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ color: theme.sub, fontSize: 11.5, marginBottom: 4, fontWeight: '600' }}>SP lỗi (pcs):</Text>
+                            <TextInput
+                              style={styles.input(theme)}
+                              keyboardType="numeric"
+                              placeholder="SL SP lỗi (pcs)"
+                              placeholderTextColor={theme.sub}
+                              value={editDefectQty}
+                              onChangeText={setEditDefectQty}
+                              onFocus={() => handleFocus(editLogWrapRef)}
+                            />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ color: theme.sub, fontSize: 11.5, marginBottom: 4, fontWeight: '600' }}>Thùng lỗi (thùng):</Text>
+                            <TextInput
+                              style={styles.input(theme)}
+                              keyboardType="numeric"
+                              placeholder="SL thùng lỗi"
+                              placeholderTextColor={theme.sub}
+                              value={editDefectBoxQty}
+                              onChangeText={setEditDefectBoxQty}
+                              onFocus={() => handleFocus(editLogWrapRef)}
+                            />
+                          </View>
+                        </View>
                         <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-                          {[['yellow', 'Thẻ vàng'], ['red', 'Thẻ đỏ'], ['tear', 'Rách bọc']].map(([key, label]) => (
-                            <TouchableOpacity
-                              key={key}
-                              style={[styles.defectChip, { borderColor: theme.line, backgroundColor: editDefectTypes[key] ? theme.accent : theme.card }]}
-                              onPress={() => setEditDefectTypes(prev => ({ ...prev, [key]: !prev[key] }))}
-                            >
-                              <Text style={{ color: editDefectTypes[key] ? '#fff' : theme.sub, fontSize: 12.5 }}>{label}</Text>
-                            </TouchableOpacity>
-                          ))}
+                          {[['yellow', 'Thẻ vàng'], ['red', 'Thẻ đỏ'], ['tear', 'Rách bọc']].map(([key, label]) => {
+                            const chipColor = key === 'yellow' ? '#FFD600' : key === 'red' ? '#E53935' : '#FFFFFF';
+                            const textColor = key === 'tear' ? '#333' : '#FFFFFF';
+                            const active = !!editDefectTypes[key];
+                            return (
+                              <TouchableOpacity
+                                key={key}
+                                style={[styles.defectChip, { borderColor: theme.line, backgroundColor: active ? chipColor : theme.card }]}
+                                onPress={() => setEditDefectTypes(prev => ({ ...prev, [key]: !prev[key] }))}
+                              >
+                                <Text style={{ color: active ? textColor : theme.sub, fontSize: 12.5, fontWeight: active ? '700' : '500' }}>{label}</Text>
+                              </TouchableOpacity>
+                            );
+                          })}
                         </View>
                         <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
                           <TouchableOpacity style={[styles.addBtn, { backgroundColor: theme.good }]} onPress={handleEditSave}>
@@ -1114,13 +1304,34 @@ const styles = StyleSheet.create({
     gap: 6,
     alignItems: 'center',
   },
-  refInputDefect: {
-    width: 84,
+  refDefectInputsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 6,
+  },
+  refInputDefectHalf: {
+    flex: 1,
     borderWidth: 1,
     borderRadius: 8,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     paddingVertical: 7,
-    fontSize: 14,
+    fontSize: 12.5,
+    fontWeight: '600',
+    minHeight: 38,
+  },
+  refDefectChipsRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 6,
+    flexWrap: 'wrap',
+  },
+  refInputDefect: {
+    width: 92,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    fontSize: 13,
     fontWeight: '600',
     minHeight: 40,
   },
@@ -1159,7 +1370,64 @@ const styles = StyleSheet.create({
   },
   sectionLabel: (theme) => ({ color: theme.sub, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', marginTop: 14, marginBottom: 6 }),
   input: (theme) => ({ borderWidth: 1, borderColor: theme.line, backgroundColor: theme.bg, color: theme.ink, borderRadius: 10, padding: 12, fontSize: 16, fontWeight: '600' }),
-  pickerWrap: { borderWidth: 1, borderRadius: 10, overflow: 'hidden', justifyContent: 'center' },
+  lineSelectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    marginTop: 4,
+  },
+  lineSelectLabel: {
+    fontSize: 12.5,
+    fontWeight: '700',
+  },
+  lineToggleWrap: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderRadius: 8,
+    overflow: 'hidden',
+    padding: 2,
+  },
+  lineToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  lineToggleBtnActive: {},
+  lineToggleText: {
+    fontSize: 12.5,
+  },
+  refLineSelectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    marginTop: 2,
+  },
+  refLineSelectLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  refLineToggleWrap: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderRadius: 6,
+    overflow: 'hidden',
+    padding: 2,
+  },
+  refLineToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 5,
+  },
+  refLineToggleBtnActive: {},
+  refLineToggleText: {
+    fontSize: 11.5,
+  },
   addBtn: { paddingHorizontal: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
   defectChip: { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 999, borderWidth: 1 },
   defectChipCompact: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, borderWidth: 1 },

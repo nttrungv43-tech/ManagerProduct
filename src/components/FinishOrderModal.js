@@ -156,6 +156,7 @@ export default function FinishOrderModal({
                 const produced = Number(item.produced) || 0;
                 const target = Number(item.target) || 0;
                 const defect = Number(item.defect) || 0;
+                const defectBox = Number(item.defect_box) || 0;
 
                 return (
                   <TouchableOpacity
@@ -201,7 +202,12 @@ export default function FinishOrderModal({
 
                       <Text style={[styles.poSub, { color: theme.sub }]}>
                         Sản lượng: {produced.toLocaleString()}/{target.toLocaleString()} pcs
-                        {defect > 0 ? ` · Lỗi: ${defect.toLocaleString()}` : ''}
+                        {Boolean(defect > 0 || defectBox > 0)
+                          ? ` · Lỗi: ${[
+                              defect > 0 ? `${defect.toLocaleString()} pcs` : null,
+                              defectBox > 0 ? `${defectBox.toLocaleString()} thùng` : null,
+                            ].filter(Boolean).join(', ')}`
+                          : ''}
                       </Text>
                     </View>
                   </TouchableOpacity>

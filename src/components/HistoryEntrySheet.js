@@ -41,9 +41,10 @@ export default function HistoryEntrySheet({
 
   // Form states
   const [date, setDate] = useState(entry?.date ?? (initialDate || todayLocal()));
-  const [line, setLine] = useState(entry?.line ?? 'manual');
+  const [line, setLine] = useState(entry?.line ?? 'auto');
   const [qty, setQty] = useState(entry ? String(entry.qty) : '');
   const [defectQty, setDefectQty] = useState(entry?.defect_qty ? String(entry.defect_qty) : '');
+  const [defectBoxQty, setDefectBoxQty] = useState(entry?.defect_box_qty ? String(entry.defect_box_qty) : '');
   const [selectedRef, setSelectedRef] = useState(entry?.refNo ?? '');
   const [defectTypes, setDefectTypes] = useState(() => {
     const types = entry?.defect_types || [];
@@ -110,13 +111,23 @@ export default function HistoryEntrySheet({
     if (defectQty && defectQty.trim()) {
       const dq = parseQty(defectQty);
       if (dq === null || dq < 0) {
-        Alert.alert('Số lượng lỗi không hợp lệ', 'Số lượng lỗi phải là số nguyên không âm.');
+        Alert.alert('Số lượng SP lỗi không hợp lệ', 'Số lượng sản phẩm lỗi phải là số nguyên không âm.');
         return;
       }
       parsedDefect = dq;
     }
 
-    const activeTypes = parsedDefect > 0
+    let parsedDefectBox = 0;
+    if (defectBoxQty && defectBoxQty.trim()) {
+      const dbq = parseQty(defectBoxQty);
+      if (dbq === null || dbq < 0) {
+        Alert.alert('Số lượng thùng lỗi không hợp lệ', 'Số lượng thùng lỗi phải là số nguyên không âm.');
+        return;
+      }
+      parsedDefectBox = dbq;
+    }
+
+    const activeTypes = (parsedDefect > 0 || parsedDefectBox > 0)
       ? Object.keys(defectTypes).filter(k => defectTypes[k])
       : [];
 
@@ -128,6 +139,7 @@ export default function HistoryEntrySheet({
         qty: parsedQty,
         line,
         defectQty: parsedDefect,
+        defectBoxQty: parsedDefectBox,
         defectTypes: activeTypes,
         refNo: selectedRef || null,
       };
@@ -286,20 +298,6 @@ export default function HistoryEntrySheet({
                       style={[
                         styles.lineBtn,
                         {
-                          borderColor: line === 'manual' ? theme.accent : theme.line,
-                          backgroundColor: line === 'manual' ? theme.accent : theme.bg,
-                        },
-                      ]}
-                      onPress={() => setLine('manual')}
-                    >
-                      <Text style={{ color: line === 'manual' ? '#fff' : theme.ink, fontWeight: '700', fontSize: 13 }}>
-                        Thủ công
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.lineBtn,
-                        {
                           borderColor: line === 'auto' ? theme.accent : theme.line,
                           backgroundColor: line === 'auto' ? theme.accent : theme.bg,
                         },
@@ -308,6 +306,20 @@ export default function HistoryEntrySheet({
                     >
                       <Text style={{ color: line === 'auto' ? '#fff' : theme.ink, fontWeight: '700', fontSize: 13 }}>
                         Tự động
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.lineBtn,
+                        {
+                          borderColor: line === 'manual' ? theme.accent : theme.line,
+                          backgroundColor: line === 'manual' ? theme.accent : theme.bg,
+                        },
+                      ]}
+                      onPress={() => setLine('manual')}
+                    >
+                      <Text style={{ color: line === 'manual' ? '#fff' : theme.ink, fontWeight: '700', fontSize: 13 }}>
+                        Thủ công
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -324,17 +336,34 @@ export default function HistoryEntrySheet({
                     onFocus={() => scrollToInput(180)}
                   />
 
-                  {/* Nhập hàng lỗi */}
+                  {/* Nhập số lượng hàng lỗi */}
                   <Text style={styles.label(theme)}>Hàng lỗi (không bắt buộc)</Text>
-                  <TextInput
-                    style={styles.input(theme)}
-                    keyboardType="numeric"
-                    placeholder="VD: 2 (không bắt buộc)"
-                    placeholderTextColor={theme.sub}
-                    value={defectQty}
-                    onChangeText={setDefectQty}
-                    onFocus={() => scrollToInput(260)}
-                  />
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: theme.sub, fontSize: 11.5, marginBottom: 4, fontWeight: '600' }}>SP lỗi (pcs):</Text>
+                      <TextInput
+                        style={styles.input(theme)}
+                        keyboardType="numeric"
+                        placeholder="VD: 10"
+                        placeholderTextColor={theme.sub}
+                        value={defectQty}
+                        onChangeText={setDefectQty}
+                        onFocus={() => scrollToInput(240)}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: theme.sub, fontSize: 11.5, marginBottom: 4, fontWeight: '600' }}>Thùng lỗi (thùng):</Text>
+                      <TextInput
+                        style={styles.input(theme)}
+                        keyboardType="numeric"
+                        placeholder="VD: 2"
+                        placeholderTextColor={theme.sub}
+                        value={defectBoxQty}
+                        onChangeText={setDefectBoxQty}
+                        onFocus={() => scrollToInput(240)}
+                      />
+                    </View>
+                  </View>
 
                   {/* Chọn loại lỗi */}
                   <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>

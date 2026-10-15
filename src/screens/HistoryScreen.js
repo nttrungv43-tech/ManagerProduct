@@ -116,9 +116,14 @@ export default function HistoryScreen() {
   function handleDeleteGroup(g) {
     const label = labelFor(g.groupKey);
     const typeText = historyGroup === 'day' ? 'ngày' : historyGroup === 'month' ? 'tháng' : 'năm';
+    const defectParts = [];
+    if (g.defectTotal > 0) defectParts.push(`${g.defectTotal.toLocaleString('vi-VN')} pcs`);
+    if (g.defectBoxTotal > 0) defectParts.push(`${g.defectBoxTotal.toLocaleString('vi-VN')} thùng`);
+    const defectText = defectParts.length ? defectParts.join(', ') : '0';
+
     Alert.alert(
       `Xác nhận xoá ${typeText}`,
-      `Bạn có chắc chắn muốn xoá toàn bộ lịch sử sản xuất của ${label}?\n\n• Tổng sản lượng: ${g.total.toLocaleString('vi-VN')} pcs\n• Số lỗi: ${g.defectTotal.toLocaleString('vi-VN')} pcs\n\nSố lượng đã sản xuất trên các mã hàng sẽ được hoàn lại tương ứng. Thao tác không thể hoàn tác.`,
+      `Bạn có chắc chắn muốn xoá toàn bộ lịch sử sản xuất của ${label}?\n\n• Tổng sản lượng: ${g.total.toLocaleString('vi-VN')} pcs\n• Số lỗi: ${defectText}\n\nSố lượng đã sản xuất trên các mã hàng sẽ được hoàn lại tương ứng. Thao tác không thể hoàn tác.`,
       [
         { text: 'Huỷ', style: 'cancel' },
         {
@@ -142,6 +147,7 @@ export default function HistoryScreen() {
         qty: payload.qty,
         line: payload.line,
         defectQty: payload.defectQty,
+        defectBoxQty: payload.defectBoxQty,
         defectTypes: payload.defectTypes,
         refNo: payload.refNo,
       });
@@ -151,6 +157,7 @@ export default function HistoryScreen() {
         qty: payload.qty,
         line: payload.line,
         defectQty: payload.defectQty,
+        defectBoxQty: payload.defectBoxQty,
         defectTypes: payload.defectTypes,
         refNo: payload.refNo,
       });
@@ -237,7 +244,12 @@ export default function HistoryScreen() {
                 <View style={styles.numsRow}>
                   <Text style={{ color: theme.sub, fontSize: 12 }}>Thủ công: {g.manualTotal.toLocaleString()}</Text>
                   <Text style={{ color: theme.sub, fontSize: 12 }}>Tự động: {g.autoTotal.toLocaleString()}</Text>
-                  <Text style={{ color: theme.bad, fontSize: 12 }}>Lỗi: {g.defectTotal.toLocaleString()}</Text>
+                  <Text style={{ color: theme.bad, fontSize: 12 }}>
+                    Lỗi: {[
+                      g.defectTotal > 0 ? `${g.defectTotal.toLocaleString()} pcs` : null,
+                      g.defectBoxTotal > 0 ? `${g.defectBoxTotal.toLocaleString()} thùng` : null,
+                    ].filter(Boolean).join(', ') || '0'}
+                  </Text>
                 </View>
 
                 {isOpen && (
@@ -261,11 +273,14 @@ export default function HistoryScreen() {
                               <Text style={{ color: theme.accent, fontSize: 13.5, fontWeight: '700' }}>
                                 {hasMultipleRefs ? 'Tổng ' : ''}{r.qty.toLocaleString()} pcs
                               </Text>
-                              {r.defect_qty ? (
+                              {Boolean(r.defect_qty || r.defect_box_qty) && (
                                 <Text style={{ color: theme.bad, fontSize: 11, fontWeight: '500', marginTop: 1 }}>
-                                  Lỗi: {r.defect_qty.toLocaleString()} pcs
+                                  Lỗi: {[
+                                    r.defect_qty ? `${r.defect_qty.toLocaleString()} pcs` : null,
+                                    r.defect_box_qty ? `${r.defect_box_qty.toLocaleString()} thùng` : null,
+                                  ].filter(Boolean).join(', ')}
                                 </Text>
-                              ) : null}
+                              )}
                             </View>
                           </View>
 
@@ -278,7 +293,12 @@ export default function HistoryScreen() {
                                   </Text>
                                   <Text style={{ color: theme.sub, fontSize: 11.5 }}>
                                     {rf.qty.toLocaleString()} pcs
-                                    {rf.defect_qty ? ` · Lỗi ${rf.defect_qty.toLocaleString()}` : ''}
+                                    {Boolean(rf.defect_qty || rf.defect_box_qty)
+                                      ? ` · Lỗi ${[
+                                          rf.defect_qty ? `${rf.defect_qty.toLocaleString()} pcs` : null,
+                                          rf.defect_box_qty ? `${rf.defect_box_qty.toLocaleString()} thùng` : null,
+                                        ].filter(Boolean).join(', ')}`
+                                      : ''}
                                   </Text>
                                 </View>
                               ))}
@@ -336,9 +356,12 @@ export default function HistoryScreen() {
                                 <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>
                                   {entry.qty.toLocaleString()} pcs
                                 </Text>
-                                {entry.defect_qty > 0 && (
+                                {Boolean(entry.defect_qty > 0 || entry.defect_box_qty > 0) && (
                                   <Text style={{ color: theme.bad, fontSize: 11.5 }}>
-                                    · Lỗi: {entry.defect_qty.toLocaleString()}
+                                    · Lỗi: {[
+                                      entry.defect_qty > 0 ? `${entry.defect_qty.toLocaleString()} pcs` : null,
+                                      entry.defect_box_qty > 0 ? `${entry.defect_box_qty.toLocaleString()} thùng` : null,
+                                    ].filter(Boolean).join(', ')}
                                     {entry.defect_types?.length ? ` (${entry.defect_types.join(', ')})` : ''}
                                   </Text>
                                 )}

@@ -61,9 +61,14 @@ export default function DeleteHistoryModal({
   function handleConfirm() {
     if (!selectedGroup || busy) return;
     const label = labelFor(selectedGroup.groupKey, groupType);
+    const defectParts = [];
+    if (selectedGroup.defectTotal > 0) defectParts.push(`${selectedGroup.defectTotal.toLocaleString('vi-VN')} pcs`);
+    if (selectedGroup.defectBoxTotal > 0) defectParts.push(`${selectedGroup.defectBoxTotal.toLocaleString('vi-VN')} thùng`);
+    const defectText = defectParts.length ? defectParts.join(', ') : '0';
+
     Alert.alert(
       'Xác nhận xoá dữ liệu',
-      `Bạn có chắc chắn muốn xoá toàn bộ lịch sử sản xuất của ${label}?\n\n• Tổng sản lượng: ${selectedGroup.total.toLocaleString('vi-VN')} pcs\n• Số lỗi: ${selectedGroup.defectTotal.toLocaleString('vi-VN')} pcs\n\nSố lượng đã sản xuất trên các mã hàng sẽ được hoàn lại tương ứng. Thao tác này KHÔNG THỂ HOÀN TÁC.`,
+      `Bạn có chắc chắn muốn xoá toàn bộ lịch sử sản xuất của ${label}?\n\n• Tổng sản lượng: ${selectedGroup.total.toLocaleString('vi-VN')} pcs\n• Số lỗi: ${defectText}\n\nSố lượng đã sản xuất trên các mã hàng sẽ được hoàn lại tương ứng. Thao tác này KHÔNG THỂ HOÀN TÁC.`,
       [
         { text: 'Huỷ', style: 'cancel' },
         {
@@ -195,9 +200,12 @@ export default function DeleteHistoryModal({
                           <Text style={{ color: theme.sub, fontSize: 12 }}>
                             Tự động: {selectedGroup.autoTotal.toLocaleString('vi-VN')} pcs
                           </Text>
-                          {selectedGroup.defectTotal > 0 && (
+                          {Boolean(selectedGroup.defectTotal > 0 || selectedGroup.defectBoxTotal > 0) && (
                             <Text style={{ color: theme.bad, fontSize: 12 }}>
-                              Lỗi: {selectedGroup.defectTotal.toLocaleString('vi-VN')} pcs
+                              Lỗi: {[
+                                selectedGroup.defectTotal > 0 ? `${selectedGroup.defectTotal.toLocaleString('vi-VN')} pcs` : null,
+                                selectedGroup.defectBoxTotal > 0 ? `${selectedGroup.defectBoxTotal.toLocaleString('vi-VN')} thùng` : null,
+                              ].filter(Boolean).join(', ')}
                             </Text>
                           )}
                         </View>

@@ -4,12 +4,17 @@ import { View, Text, StyleSheet } from 'react-native';
 import ProgressBar from '@/components/ProgressBar';
 
 export default function SummaryCards({ totals, theme }) {
-  const { totalTarget, totalProduced, overallPct, totalDefect } = totals;
+  const { totalTarget, totalProduced, overallPct, totalDefect = 0, totalDefectBox = 0 } = totals;
+  const defectNum = totalDefectBox > 0
+    ? `${totalDefect.toLocaleString()} / ${totalDefectBox.toLocaleString()}`
+    : totalDefect.toLocaleString();
+  const defectLbl = totalDefectBox > 0 ? 'SP / Thùng lỗi' : 'Hàng lỗi';
+
   const cards = [
     { num: totalTarget.toLocaleString(), lbl: 'Kế hoạch', color: theme.ink },
     { num: totalProduced.toLocaleString(), lbl: 'Đã sản xuất', color: theme.accent },
     { num: `${overallPct}%`, lbl: 'Hoàn thành', color: theme.good },
-    { num: totalDefect.toLocaleString(), lbl: 'Hàng lỗi', color: theme.bad },
+    { num: defectNum, lbl: defectLbl, color: theme.bad },
   ];
   return (
     <View style={styles.container}>

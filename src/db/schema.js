@@ -136,7 +136,8 @@ CREATE TABLE IF NOT EXISTS production_entries (
   date          TEXT    NOT NULL CHECK (COALESCE(date(date) = date, 0)),
   qty           INTEGER NOT NULL CHECK (qty > 0),
   line          TEXT    NOT NULL DEFAULT 'manual' CHECK (line IN ('manual', 'auto')),
-  defect_qty    INTEGER NOT NULL DEFAULT 0 CHECK (defect_qty >= 0)
+  defect_qty     INTEGER NOT NULL DEFAULT 0 CHECK (defect_qty >= 0),
+  defect_box_qty INTEGER NOT NULL DEFAULT 0 CHECK (defect_box_qty >= 0)
 );
 CREATE INDEX IF NOT EXISTS ix_pe_line ON production_entries(order_line_id, date);
 CREATE INDEX IF NOT EXISTS ix_pe_date ON production_entries(date);
@@ -232,7 +233,7 @@ export const REQUIRED_COLUMNS = {
   order_lines: ['id', 'po_id', 'item_code', 'target', 'nw_kg', 'gw_kg', 'volume_cbm', 'package_count'],
   item_refs: ['id', 'order_batch_id', 'item_code', 'ref_no'],
   order_line_refs: ['order_line_id', 'ref_no', 'target'],
-  production_entries: ['id', 'order_line_id', 'date', 'qty', 'line', 'defect_qty'],
+  production_entries: ['id', 'order_line_id', 'date', 'qty', 'line', 'defect_qty', 'defect_box_qty'],
   production_defects: ['entry_id', 'type'],
   production_entry_refs: ['entry_id', 'order_line_id', 'ref_no'],
   containers: ['id', 'order_batch_id', 'po_id', 'container_no', 'seal_no'],
@@ -265,6 +266,7 @@ export const ADDABLE_COLUMN_DECLS = {
   'order_lines.gw_kg': 'REAL',
   'order_lines.volume_cbm': 'REAL',
   'order_lines.package_count': 'INTEGER',
+  'production_entries.defect_box_qty': 'INTEGER NOT NULL DEFAULT 0',
   'containers.seal_no': 'TEXT',
   'pallets.c_no': 'TEXT',
   'pallets.is_mixed': 'INTEGER NOT NULL DEFAULT 0',
@@ -314,6 +316,7 @@ SELECT
   l.nw_kg, l.gw_kg, l.volume_cbm, l.package_count,
   COALESCE(e.produced, 0)  AS produced,
   COALESCE(e.defect, 0)    AS defect,
+  COALESCE(e.defect_box, 0) AS defect_box,
   l.target - COALESCE(e.produced, 0) AS remaining,
   -- FEAT-22: số hiệu nhà máy của **riêng PO × mã này**.
   -- Gộp ref_no và target vào MỘT chuỗi "ref:target" rồi GROUP_CONCAT — cố ý KHÔNG tách thành 2 cột.
@@ -349,8 +352,9 @@ FROM order_lines l
 JOIN pos p ON p.id = l.po_id
 LEFT JOIN (
   SELECT order_line_id,
-         SUM(qty)        AS produced,
-         SUM(defect_qty) AS defect
+         SUM(qty)            AS produced,
+         SUM(defect_qty)     AS defect,
+         SUM(defect_box_qty) AS defect_box
   FROM production_entries
   GROUP BY order_line_id
 ) e ON e.order_line_id = l.id;
@@ -366,6 +370,7 @@ SELECT
   SUM(v.target)                   AS target,
   SUM(v.produced)                 AS produced,
   SUM(v.defect)                   AS defect,
+  SUM(v.defect_box)               AS defect_box,
   SUM(v.target) - SUM(v.produced) AS remaining
 FROM v_line_progress v
 GROUP BY v.order_batch_id, v.po_id, v.po;
