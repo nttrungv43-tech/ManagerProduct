@@ -144,5 +144,42 @@ eq('Tìm thấy 2 container chứa D980470 và D980294', r12.length, 2);
 eq('Gồm Container 1', r12[0].container_no, 'Container 1');
 eq('Và Container 3', r12[1].container_no, 'Container 3');
 
+console.log('\n--- TEST 13: Xác định cờ nổi bật container (isContainerMatched) và đếm số kiện khớp ---');
+function getContainerMatchInfo(container, searchQuery) {
+  const q = String(searchQuery || '').trim().toLowerCase();
+  if (!q) return { isContainerMatched: false, matchingPalletCount: 0, matchingPallets: [] };
+  const matchingPallets = (container.pallets || []).filter(p =>
+    (p.items || []).some(it =>
+      String(it.ntk || '').toLowerCase().includes(q) ||
+      String(it.order_ref || '').toLowerCase().includes(q)
+    )
+  );
+  return {
+    isContainerMatched: matchingPallets.length > 0,
+    matchingPalletCount: matchingPallets.length,
+    matchingPallets,
+  };
+}
+
+const matchInfoC1 = getContainerMatchInfo(mockContainers[0], '106160');
+eq('Container 1 khớp mã 106160', matchInfoC1.isContainerMatched, true);
+eq('Container 1 có đúng 1 kiện khớp', matchInfoC1.matchingPalletCount, 1);
+eq('Kiện khớp đúng là kiện 2 (pallet_no 2)', matchInfoC1.matchingPallets[0].pallet_no, 2);
+
+const matchInfoC2 = getContainerMatchInfo(mockContainers[1], '106160');
+eq('Container 2 không khớp mã 106160', matchInfoC2.isContainerMatched, false);
+eq('Container 2 có 0 kiện khớp', matchInfoC2.matchingPalletCount, 0);
+
+console.log('\n--- TEST 14: Nổi bật kiện mix (hasMatchedItem) khi tìm mã hoặc số hiệu ref ---');
+const matchInfoC3 = getContainerMatchInfo(mockContainers[2], 'D980294');
+eq('Container 3 khớp ref D980294', matchInfoC3.isContainerMatched, true);
+eq('Container 3 có đúng 1 kiện khớp', matchInfoC3.matchingPalletCount, 1);
+eq('Kiện khớp là kiện mix 2', matchInfoC3.matchingPallets[0].pallet_no, 2);
+
+console.log('\n--- TEST 15: Khi không tìm kiếm (searchQuery rỗng), cờ nổi bật luôn là false ---');
+const matchInfoEmpty = getContainerMatchInfo(mockContainers[0], '');
+eq('searchQuery rỗng => isContainerMatched = false', matchInfoEmpty.isContainerMatched, false);
+eq('searchQuery rỗng => 0 kiện khớp', matchInfoEmpty.matchingPalletCount, 0);
+
 console.log(`\nKết quả test-containerSearch: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

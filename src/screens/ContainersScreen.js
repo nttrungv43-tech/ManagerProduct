@@ -14,6 +14,7 @@ import PalletEditSheet, { palletErrorMessage } from '@/components/PalletEditShee
 import ContainerEditSheet from '@/components/ContainerEditSheet';
 import FinishOrderModal from '@/components/FinishOrderModal';
 import PackStatusModal from '@/components/PackStatusModal';
+import { checkPalletStatus, isPalletMatchingStatus } from '@/utils/packStatus';
 
 export default function ContainersScreen() {
   const theme = getTheme(useColorScheme());
@@ -26,6 +27,7 @@ export default function ContainersScreen() {
   } = useAppStore();
   const [packModalTarget, setPackModalTarget] = useState(null); // { item, palletNo }
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeStatusFilter, setActiveStatusFilter] = useState('all'); // 'all' | 'unlabeled' | 'incomplete' | 'both'
   const [expandedIds, setExpandedIds] = useState(new Set());
   // FEAT-15 (AC-ARCH-01/03): trạng thái mở nội dung của các thẻ đơn lưu trữ.
   // Mặc định mọi thẻ đều thu gọn (ẩn nội dung).
@@ -58,25 +60,119 @@ export default function ContainersScreen() {
     return Array.from(set).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
   }, [containers]);
 
-  const filtered = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return containers.filter(c => {
+  // Thống kê nhanh tổng quan các kiện có vấn đề (để hiển thị lên 3 nút đếm ở đầu trang)
+  const statusSummary = useMemo(() => {
+    let unlabeledCount = 0;
+    let incompleteCount = 0;
+    let bothCount = 0;
+    let totalPallets = 0;
+
+    (containers || []).forEach(c => {
       const matchPo = activeContainerFilter === 'all'
         ? true
         : (c.po === activeContainerFilter || (c.pallets || []).some(p => (p.items || []).some(it => it.po === activeContainerFilter)));
-      if (!matchPo) return false;
+      if (!matchPo) return;
 
-      if (!q) return true;
-      return (c.pallets || []).some(p =>
-        (p.items || []).some(it =>
-          String(it.ntk || '').toLowerCase().includes(q) ||
-          String(it.order_ref || '').toLowerCase().includes(q)
-        )
-      );
+      (c.pallets || []).forEach(p => {
+        const matchPalletPo = activeContainerFilter === 'all'
+          ? true
+          : (p.items || []).some(it => it.po === activeContainerFilter);
+        if (!matchPalletPo) return;
+
+        totalPallets++;
+        const { hasUnlabeled, hasIncomplete, hasBoth } = checkPalletStatus(p);
+        if (hasUnlabeled) unlabeledCount++;
+        if (hasIncomplete) incompleteCount++;
+        if (hasBoth) bothCount++;
+      });
     });
-  }, [containers, activeContainerFilter, searchQuery]);
 
+    return {
+      unlabeledCount,
+      incompleteCount,
+      bothCount,
+      totalPallets,
+    };
+  }, [containers, activeContainerFilter]);
+
+  const isFilteringStatus = activeStatusFilter !== 'all';
   const isSearching = Boolean(searchQuery.trim());
+  const isAutoExpanded = isSearching || isFilteringStatus;
+
+  const currentFilterMeta = useMemo(() => {
+    if (activeStatusFilter === 'unlabeled') {
+      return { key: 'unlabeled', label: 'Chưa dán nhãn', color: theme.bad, icon: 'pricetag' };
+    }
+    if (activeStatusFilter === 'incomplete') {
+      return { key: 'incomplete', label: 'Chưa đủ số lượng', color: theme.warn, icon: 'hourglass' };
+    }
+    if (activeStatusFilter === 'both') {
+      return { key: 'both', label: 'Bị cả 2 (Thiếu SL & Chưa dán nhãn)', color: '#dc2626', icon: 'alert-circle' };
+    }
+    return { key: 'all', label: 'Tất cả', color: theme.accent, icon: 'cube' };
+  }, [activeStatusFilter, theme]);
+
+  const filtered = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+
+    return (containers || []).map(c => {
+      // 1. Lọc PO của container
+      const matchPo = activeContainerFilter === 'all'
+        ? true
+        : (c.po === activeContainerFilter || (c.pallets || []).some(p => (p.items || []).some(it => it.po === activeContainerFilter)));
+      if (!matchPo) return null;
+
+      const sortedPallets = (c.pallets ?? []).sort(
+        (a, b) => (a.pallet_no ?? a.no) - (b.pallet_no ?? b.no)
+      );
+
+      // 2. Lọc các kiện bên trong container theo PO, StatusFilter và SearchQuery (Phương án A)
+      const matchingPallets = sortedPallets.filter(p => {
+        // Lọc PO kiện
+        if (activeContainerFilter !== 'all') {
+          const matchPalletPo = (p.items || []).some(it => it.po === activeContainerFilter);
+          if (!matchPalletPo) return false;
+        }
+
+        // Lọc theo trạng thái kiện (chưa dán nhãn / chưa đủ SL / cả hai)
+        if (!isPalletMatchingStatus(p, activeStatusFilter)) {
+          return false;
+        }
+
+        // Lọc theo từ khoá tìm kiếm
+        if (q) {
+          const matchSearch = (p.items || []).some(it =>
+            String(it.ntk || '').toLowerCase().includes(q) ||
+            String(it.order_ref || '').toLowerCase().includes(q)
+          );
+          if (!matchSearch) return false;
+        }
+
+        return true;
+      });
+
+      // Nếu đang lọc (bởi trạng thái hoặc tìm kiếm): container phải có ít nhất 1 kiện thoả mãn mới hiển thị
+      if ((isFilteringStatus || q) && matchingPallets.length === 0) {
+        return null;
+      }
+
+      return {
+        ...c,
+        sortedPallets,
+        // Phương án A: Khi lọc trạng thái, chỉ hiển thị các kiện khớp (ẩn các kiện đã hoàn thành đầy đủ)
+        visiblePallets: isFilteringStatus ? matchingPallets : sortedPallets,
+        matchingSearchPallets: q ? matchingPallets : [],
+        isMatchedByStatus: isFilteringStatus && matchingPallets.length > 0,
+        isMatchedBySearch: isSearching && matchingPallets.length > 0,
+        matchingPallets,
+      };
+    }).filter(Boolean);
+  }, [containers, activeContainerFilter, activeStatusFilter, searchQuery, isFilteringStatus, isSearching]);
+
+  // Tổng số kiện hiển thị theo bộ lọc
+  const filteredPalletCount = useMemo(() => {
+    return filtered.reduce((sum, c) => sum + (c.visiblePallets || []).length, 0);
+  }, [filtered]);
 
   // Một kiện "đóng xong" khi **mọi** dòng hàng của nó đã tick. Với kiện một mã (thực tế
   // `Dmac.json` có 220/220 kiện một mã) đây đúng là tick của cả kiện — trước đây cần khoá
@@ -90,7 +186,7 @@ export default function ContainersScreen() {
 
   function toggleExpand(id) {
     const next = new Set(expandedIds);
-    if (isSearching) {
+    if (isAutoExpanded) {
       const key = `closed_${id}`;
       if (next.has(key)) {
         next.delete(key);
@@ -337,6 +433,123 @@ export default function ContainersScreen() {
             </TouchableOpacity>
           </View>
 
+          {/* 3 nút đếm tổng quan trạng thái kiện: Chưa dán nhãn, Chưa đủ SL, Bị cả 2 */}
+          {containers.length > 0 && (
+            <View style={styles.overviewContainer}>
+              {/* Nút 1: Chưa dán nhãn */}
+              <TouchableOpacity
+                style={[
+                  styles.overviewBtn,
+                  {
+                    backgroundColor: activeStatusFilter === 'unlabeled' ? theme.bad + '18' : theme.card,
+                    borderColor: activeStatusFilter === 'unlabeled' ? theme.bad : theme.line,
+                  },
+                ]}
+                onPress={() => setActiveStatusFilter(prev => prev === 'unlabeled' ? 'all' : 'unlabeled')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.overviewTopRow}>
+                  <View style={[styles.overviewIconWrap, { backgroundColor: theme.bad + '20' }]}>
+                    <Ionicons name="pricetag" size={12} color={theme.bad} />
+                  </View>
+                  <Text style={[styles.overviewCount, { color: theme.bad }]}>
+                    {statusSummary.unlabeledCount}
+                  </Text>
+                </View>
+                <Text style={[styles.overviewLabel, { color: theme.ink }]} numberOfLines={1}>
+                  Chưa dán nhãn
+                </Text>
+                <Text style={[styles.overviewSub, { color: theme.sub }]}>
+                  kiện
+                </Text>
+              </TouchableOpacity>
+
+              {/* Nút 2: Chưa đủ SL */}
+              <TouchableOpacity
+                style={[
+                  styles.overviewBtn,
+                  {
+                    backgroundColor: activeStatusFilter === 'incomplete' ? theme.warn + '18' : theme.card,
+                    borderColor: activeStatusFilter === 'incomplete' ? theme.warn : theme.line,
+                  },
+                ]}
+                onPress={() => setActiveStatusFilter(prev => prev === 'incomplete' ? 'all' : 'incomplete')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.overviewTopRow}>
+                  <View style={[styles.overviewIconWrap, { backgroundColor: theme.warn + '20' }]}>
+                    <Ionicons name="hourglass" size={12} color={theme.warn} />
+                  </View>
+                  <Text style={[styles.overviewCount, { color: theme.warn }]}>
+                    {statusSummary.incompleteCount}
+                  </Text>
+                </View>
+                <Text style={[styles.overviewLabel, { color: theme.ink }]} numberOfLines={1}>
+                  Chưa đủ SL
+                </Text>
+                <Text style={[styles.overviewSub, { color: theme.sub }]}>
+                  kiện
+                </Text>
+              </TouchableOpacity>
+
+              {/* Nút 3: Bị cả hai */}
+              <TouchableOpacity
+                style={[
+                  styles.overviewBtn,
+                  {
+                    backgroundColor: activeStatusFilter === 'both' ? '#dc262618' : theme.card,
+                    borderColor: activeStatusFilter === 'both' ? '#dc2626' : theme.line,
+                  },
+                ]}
+                onPress={() => setActiveStatusFilter(prev => prev === 'both' ? 'all' : 'both')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.overviewTopRow}>
+                  <View style={[styles.overviewIconWrap, { backgroundColor: '#dc262620' }]}>
+                    <Ionicons name="alert-circle" size={12} color="#dc2626" />
+                  </View>
+                  <Text style={[styles.overviewCount, { color: '#dc2626' }]}>
+                    {statusSummary.bothCount}
+                  </Text>
+                </View>
+                <Text style={[styles.overviewLabel, { color: theme.ink }]} numberOfLines={1}>
+                  Bị cả hai
+                </Text>
+                <Text style={[styles.overviewSub, { color: theme.sub }]}>
+                  kiện
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Banner trạng thái bộ lọc đang kích hoạt */}
+          {isFilteringStatus && (
+            <View
+              style={[
+                styles.filterActiveBanner,
+                {
+                  backgroundColor: currentFilterMeta.color + '15',
+                  borderColor: currentFilterMeta.color + '40',
+                },
+              ]}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, flexWrap: 'wrap' }}>
+                <Ionicons name={currentFilterMeta.icon} size={15} color={currentFilterMeta.color} style={{ marginRight: 6 }} />
+                <Text style={[styles.filterActiveText, { color: currentFilterMeta.color }]}>
+                  Đang lọc: <Text style={{ fontWeight: '800' }}>{currentFilterMeta.label}</Text> ({filteredPalletCount} kiện)
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.clearFilterPill, { backgroundColor: currentFilterMeta.color }]}
+                onPress={() => setActiveStatusFilter('all')}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={13} color="#fff" style={{ marginRight: 3 }} />
+                <Text style={{ color: '#fff', fontSize: 11.5, fontWeight: '700' }}>Hiện tất cả</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* Ô tìm kiếm mã hàng */}
           {containers.length > 0 && (
             <View style={[styles.searchBox, { borderColor: theme.line, backgroundColor: theme.card }]}>
@@ -403,24 +616,35 @@ export default function ContainersScreen() {
               <Text style={{ color: theme.sub, fontSize: 12.5, marginTop: 4, textAlign: 'center' }}>
                 {searchQuery.trim()
                   ? `Không có container nào chứa kiện có mã hàng hoặc số hiệu “${searchQuery.trim()}”.`
-                  : `Không có container nào thuộc PO “${activeContainerFilter}”.`}
+                  : (isFilteringStatus
+                      ? `Không có kiện nào thuộc trạng thái “${currentFilterMeta.label}” trong bộ lọc hiện tại.`
+                      : `Không có container nào thuộc PO “${activeContainerFilter}”.`)}
               </Text>
-              {searchQuery.trim() ? (
-                <TouchableOpacity
-                  style={[styles.clearSearchBtn, { backgroundColor: theme.accent }]}
-                  onPress={() => setSearchQuery('')}
-                >
-                  <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12.5 }}>Xoá tìm kiếm</Text>
-                </TouchableOpacity>
-              ) : null}
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+                {searchQuery.trim() ? (
+                  <TouchableOpacity
+                    style={[styles.clearSearchBtn, { backgroundColor: theme.accent, marginTop: 0 }]}
+                    onPress={() => setSearchQuery('')}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12.5 }}>Xoá tìm kiếm</Text>
+                  </TouchableOpacity>
+                ) : null}
+                {isFilteringStatus ? (
+                  <TouchableOpacity
+                    style={[styles.clearSearchBtn, { backgroundColor: currentFilterMeta.color, marginTop: 0 }]}
+                    onPress={() => setActiveStatusFilter('all')}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12.5 }}>Bỏ lọc trạng thái</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             </View>
           )}
 
         {filtered.map(c => {
-          const isOpen = isSearching ? !expandedIds.has(`closed_${c.id}`) : expandedIds.has(c.id);
-          const sortedPallets = (c.pallets ?? []).sort(
-            (a, b) => (a.pallet_no ?? a.no) - (b.pallet_no ?? b.no)
-          );
+          const isOpen = isAutoExpanded ? !expandedIds.has(`closed_${c.id}`) : expandedIds.has(c.id);
+          const sortedPallets = c.sortedPallets;
+          const visiblePallets = c.visiblePallets || sortedPallets;
           const containerPos = Array.from(new Set([
             c.po,
             ...(c.pallets ?? []).flatMap(p => (p.items ?? []).map(it => it.po)),
@@ -443,13 +667,79 @@ export default function ContainersScreen() {
             c.pallets.flatMap(p => p.items.map(it => it.ntk)).filter(n => !knownNtks.has(n))
           )];
 
+          const matchingSearchPallets = c.matchingSearchPallets || [];
+          const isContainerMatched = isSearching && matchingSearchPallets.length > 0;
+          const isStatusMatched = isFilteringStatus && visiblePallets.length > 0;
+          const isCardHighlighted = isContainerMatched || isStatusMatched;
+          const cardBorderColor = isContainerMatched ? theme.accent : currentFilterMeta.color;
+
           return (
-            <View key={c.id} style={[styles.card, { backgroundColor: theme.card, borderColor: theme.line }]}>
+            <View
+              key={c.id}
+              style={[
+                styles.card,
+                {
+                  backgroundColor: theme.card,
+                  borderColor: isCardHighlighted ? cardBorderColor : theme.line,
+                  borderWidth: isCardHighlighted ? (isContainerMatched ? 2 : 1.5) : 1,
+                  ...(isCardHighlighted ? {
+                    shadowColor: cardBorderColor,
+                    shadowOffset: { width: 0, height: 3 },
+                    shadowOpacity: 0.18,
+                    shadowRadius: 6,
+                    elevation: 3,
+                  } : {}),
+                },
+              ]}
+            >
+              {/* Thanh thông báo nổi bật khi container khớp tìm kiếm */}
+              {isContainerMatched && (
+                <View style={[styles.matchedBanner, { backgroundColor: theme.accent + '15', borderColor: theme.accent + '40' }]}>
+                  <Ionicons name="sparkles" size={13} color={theme.accent} style={{ marginRight: 6 }} />
+                  <Text style={[styles.matchedBannerText, { color: theme.accent }]}>
+                    Container chứa mã &ldquo;{searchQuery.trim()}&rdquo; ({matchingSearchPallets.length}/{c.pallets.length} kiện khớp)
+                  </Text>
+                </View>
+              )}
+
+              {/* Thanh thông báo khi đang lọc trạng thái kiện (Phương án A) */}
+              {isStatusMatched && !isContainerMatched && (
+                <View style={[styles.matchedBanner, { backgroundColor: currentFilterMeta.color + '15', borderColor: currentFilterMeta.color + '40' }]}>
+                  <Ionicons name={currentFilterMeta.icon} size={13} color={currentFilterMeta.color} style={{ marginRight: 6 }} />
+                  <Text style={[styles.matchedBannerText, { color: currentFilterMeta.color }]}>
+                    Container có {visiblePallets.length}/{c.pallets.length} kiện {currentFilterMeta.label.toLowerCase()}
+                  </Text>
+                </View>
+              )}
+
               <View style={styles.top}>
                 <TouchableOpacity style={{ flex: 1, paddingVertical: 2 }} onPress={() => toggleExpand(c.id)}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Ionicons name="cube-outline" size={17} color={theme.accent} style={{ marginRight: 6 }} />
-                    <Text style={{ color: theme.ink, fontWeight: '700', fontSize: 16 }}>{c.container_no}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                    <Ionicons
+                      name={isCardHighlighted ? 'cube' : 'cube-outline'}
+                      size={18}
+                      color={isCardHighlighted ? cardBorderColor : theme.accent}
+                      style={{ marginRight: 2 }}
+                    />
+                    <Text style={{ color: isCardHighlighted ? cardBorderColor : theme.ink, fontWeight: '800', fontSize: 16 }}>
+                      {c.container_no}
+                    </Text>
+                    {isContainerMatched && (
+                      <View style={[styles.matchedBadge, { backgroundColor: theme.accent }]}>
+                        <Ionicons name="search" size={10} color="#fff" style={{ marginRight: 3 }} />
+                        <Text style={styles.matchedBadgeText}>
+                          {matchingSearchPallets.length} kiện khớp
+                        </Text>
+                      </View>
+                    )}
+                    {isStatusMatched && (
+                      <View style={[styles.matchedBadge, { backgroundColor: currentFilterMeta.color }]}>
+                        <Ionicons name={currentFilterMeta.icon} size={10} color="#fff" style={{ marginRight: 3 }} />
+                        <Text style={styles.matchedBadgeText}>
+                          {visiblePallets.length}/{c.pallets.length} kiện
+                        </Text>
+                      </View>
+                    )}
                   </View>
                   {isMultiPo ? (
                     <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 3, gap: 6 }}>
@@ -477,7 +767,7 @@ export default function ContainersScreen() {
                     <Text style={{ color: theme.accent, fontWeight: '600', fontSize: 12 }}>Sửa</Text>
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => toggleExpand(c.id)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 4 }}>
-                    <Text style={{ color: isFull ? theme.good : theme.ink, fontWeight: '700', fontSize: 13.5 }}>
+                    <Text style={{ color: isFull ? theme.good : (isCardHighlighted ? cardBorderColor : theme.ink), fontWeight: '700', fontSize: 13.5 }}>
                       {cDone}/{c.pallets.length} kiện
                     </Text>
                     <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={15} color={theme.sub} style={{ marginLeft: 3 }} />
@@ -501,11 +791,20 @@ export default function ContainersScreen() {
                     <Ionicons name="add" size={15} color={theme.accent} style={{ marginRight: 4 }} />
                     <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 12.5 }}>Thêm kiện</Text>
                   </TouchableOpacity>
-                  {sortedPallets.map(p => (
+                  {isFilteringStatus && visiblePallets.length < c.pallets.length && (
+                    <View style={[styles.hiddenPalletsNote, { backgroundColor: theme.bg, borderColor: theme.line }]}>
+                      <Ionicons name="filter-outline" size={12} color={theme.sub} style={{ marginRight: 5 }} />
+                      <Text style={{ color: theme.sub, fontSize: 11.5 }}>
+                        Phương án A: Đang ẩn {c.pallets.length - visiblePallets.length} kiện đã hoàn thành đầy đủ
+                      </Text>
+                    </View>
+                  )}
+                  {visiblePallets.map(p => (
                     <PalletRow
                       key={p.id}
                       pallet={p}
                       isMultiPo={isMultiPo}
+                      activeStatusFilter={activeStatusFilter}
                       onOpenPackModal={(item, pNo) => setPackModalTarget({ item, palletNo: pNo })}
                       onToggleLabel={async (palletLineId) => {
                         const res = await togglePalletLineLabel(palletLineId);
@@ -744,5 +1043,107 @@ const styles = StyleSheet.create({
   multiPoBadgeText: {
     fontSize: 10.5,
     fontWeight: '700',
+  },
+  matchedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 10,
+  },
+  matchedBannerText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  matchedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  matchedBadgeText: {
+    color: '#fff',
+    fontSize: 10.5,
+    fontWeight: '700',
+  },
+  overviewContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  overviewBtn: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 2,
+  },
+  overviewTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginBottom: 2,
+  },
+  overviewIconWrap: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  overviewCount: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  overviewLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  overviewSub: {
+    fontSize: 9.5,
+    marginTop: 1,
+  },
+  filterActiveBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  filterActiveText: {
+    fontSize: 12.5,
+    fontWeight: '600',
+  },
+  clearFilterPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  hiddenPalletsNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 2,
+    marginBottom: 8,
   },
 });

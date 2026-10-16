@@ -4,11 +4,12 @@
 // - Dòng sản phẩm tinh gọn: Bố cục 2 cột (Trái: Checkbox + Mã hàng + Ref/PO; Phải: Số lượng + Bút chì).
 // - Nguyên tắc hiển thị: Ẩn bớt badge thừa khi bình thường; CHỈ làm nổi bật khi phát sinh ngoại lệ (đóng dở / chưa dán nhãn).
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { getItemPackInfo } from '@/utils/packStatus';
+import { getItemPackInfo, checkPalletStatus } from '@/utils/packStatus';
+import { confirmPalletToggle } from '@/utils/palletToggleConfirm';
 
-export { getItemPackInfo };
+export { getItemPackInfo, checkPalletStatus };
 
 export default function PalletRow({
   pallet,
@@ -21,6 +22,7 @@ export default function PalletRow({
   onDeletePallet,
   theme,
   highlightNtk = '',
+  activeStatusFilter = 'all',
 }) {
   const qty = (pallet.items || []).reduce((s, it) => s + it.qty, 0);
   const palletPos = new Set((pallet.items || []).map(it => it.po).filter(Boolean));
@@ -36,20 +38,50 @@ export default function PalletRow({
   // Mở rộng/thu gọn cho kiện nhiều mã (mặc định mở ra nếu chưa xong, thu gọn nếu đã xong)
   const [isExpanded, setIsExpanded] = useState(!allDone);
 
-  // 1-chạm dòng sản phẩm
+  // Tích chọn dòng sản phẩm (kèm thông báo xác nhận để tránh tích nhầm)
   function handleQuickToggle(it) {
-    if (onToggleLine) {
-      onToggleLine(it.id, Boolean(it.done));
-    }
+    if (!onToggleLine || !it) return;
+    const isDone = Boolean(it.done);
+    const isMixed = (pallet.items || []).length > 1;
+
+    confirmPalletToggle(
+      {
+        isDone,
+        palletNo,
+        qty,
+        itemCount: (pallet.items || []).length,
+        isMixed,
+        isMaster: false,
+        ntk: it.ntk,
+        itemQty: it.qty,
+      },
+      () => {
+        onToggleLine(it.id, isDone);
+      },
+      Alert
+    );
   }
 
-  // 1-chạm toàn bộ kiện (Master Toggle)
+  // Tích chọn toàn bộ kiện (Master Toggle - kèm thông báo xác nhận để tránh tích nhầm)
   function handleMasterToggle() {
-    if (onTogglePallet) {
-      onTogglePallet(pallet.id, allDone);
-    } else if (onToggleLine) {
-      pallet.items.forEach(it => onToggleLine(it.id, allDone));
-    }
+    confirmPalletToggle(
+      {
+        isDone: allDone,
+        palletNo,
+        qty,
+        itemCount: (pallet.items || []).length,
+        isMixed: true,
+        isMaster: true,
+      },
+      () => {
+        if (onTogglePallet) {
+          onTogglePallet(pallet.id, allDone);
+        } else if (onToggleLine) {
+          (pallet.items || []).forEach(it => onToggleLine(it.id, allDone));
+        }
+      },
+      Alert
+    );
   }
 
   const actions = (onEditPallet || onDeletePallet) ? (
@@ -117,26 +149,47 @@ export default function PalletRow({
               activeOpacity={0.7}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
-                <Text
-                  style={[
-                    styles.itemCodeText,
+                <View
+                  style={isMatch ? [
+                    styles.itemCodeBadge,
                     {
-                      color: isComplete ? theme.good : theme.ink,
-                      textDecorationLine: isComplete ? 'line-through' : 'none',
-                      opacity: isComplete ? 0.8 : 1,
-                      backgroundColor: isMatch ? theme.accent + '35' : 'transparent',
+                      backgroundColor: theme.accent + '25',
+                      borderColor: theme.accent,
+                      borderWidth: 1,
+                      borderRadius: 4,
+                      paddingHorizontal: 5,
+                      paddingVertical: 1,
                     },
-                  ]}
+                  ] : undefined}
                 >
-                  {it.ntk}
-                </Text>
+                  <Text
+                    style={[
+                      styles.itemCodeText,
+                      {
+                        color: isComplete ? theme.good : (isMatch ? theme.accent : theme.ink),
+                        textDecorationLine: isComplete ? 'line-through' : 'none',
+                        opacity: isComplete ? 0.8 : 1,
+                      },
+                    ]}
+                  >
+                    {it.ntk}
+                  </Text>
+                </View>
               </View>
 
               {/* Dòng phụ tinh gọn: Ref & PO */}
               {(Boolean(it.order_ref) || (hasMultiPo && Boolean(it.po))) && (
                 <Text style={[styles.metaSubtext, { color: theme.sub }]} numberOfLines={1}>
                   {it.order_ref ? (
-                    <Text style={{ color: isMatchRef ? theme.accent : theme.sub, fontWeight: isMatchRef ? '700' : '500' }}>
+                    <Text
+                      style={{
+                        color: isMatchRef ? theme.accent : theme.sub,
+                        fontWeight: isMatchRef ? '700' : '500',
+                        backgroundColor: isMatchRef ? theme.accent + '25' : 'transparent',
+                        borderRadius: isMatchRef ? 3 : 0,
+                        paddingHorizontal: isMatchRef ? 4 : 0,
+                      }}
+                    >
                       Ref {it.order_ref}
                     </Text>
                   ) : ''}
@@ -246,8 +299,57 @@ export default function PalletRow({
   // TRƯỜNG HỢP 1: Kiện nhiều mã hàng (2-7 sản phẩm)
   // --------------------------------------------------------------------------
   if (pallet.items.length > 1) {
+    const { hasUnlabeled, hasIncomplete, hasBoth } = checkPalletStatus(pallet);
+    const q = highlightNtk.trim().toLowerCase();
+    const hasMatchedItem = Boolean(
+      q &&
+      (pallet.items || []).some(it =>
+        String(it.ntk || '').toLowerCase().includes(q) ||
+        (it.order_ref && String(it.order_ref).toLowerCase().includes(q))
+      )
+    );
+
+    let statusTag = null;
+    let statusBorderColor = null;
+    let statusBgColor = null;
+
+    if (activeStatusFilter === 'both' && hasBoth) {
+      statusTag = { label: 'Bị cả hai', icon: 'alert-circle', color: '#dc2626' };
+      statusBorderColor = '#dc2626';
+      statusBgColor = '#dc26260e';
+    } else if (activeStatusFilter === 'unlabeled' && hasUnlabeled) {
+      statusTag = { label: 'Chưa dán nhãn', icon: 'pricetag', color: theme.bad };
+      statusBorderColor = theme.bad;
+      statusBgColor = theme.bad + '0e';
+    } else if (activeStatusFilter === 'incomplete' && hasIncomplete) {
+      statusTag = { label: 'Chưa đủ SL', icon: 'hourglass', color: theme.warn };
+      statusBorderColor = theme.warn;
+      statusBgColor = theme.warn + '0e';
+    }
+
+    const isCardHighlighted = hasMatchedItem || Boolean(statusBorderColor);
+    const finalBorderColor = hasMatchedItem ? theme.accent : statusBorderColor;
+    const finalBgColor = hasMatchedItem ? (theme.accent + '0e') : statusBgColor;
+    const isRowExpanded = isExpanded || hasMatchedItem || Boolean(statusTag);
+
     return (
-      <View style={[styles.palletCard, { borderTopColor: theme.line }]}>
+      <View
+        style={[
+          styles.palletCard,
+          {
+            borderTopColor: isCardHighlighted ? finalBorderColor : theme.line,
+            ...(isCardHighlighted ? {
+              backgroundColor: finalBgColor,
+              borderColor: finalBorderColor,
+              borderWidth: 1.5,
+              borderRadius: 10,
+              paddingHorizontal: 8,
+              paddingVertical: 10,
+              marginVertical: 4,
+            } : {}),
+          },
+        ]}
+      >
         {/* Tiêu đề kiện tổng hợp: Master Checkbox + Tiến độ + Nút Thu gọn/Mở rộng */}
         <View style={styles.masterHeader}>
           <TouchableOpacity
@@ -271,28 +373,42 @@ export default function PalletRow({
 
           <TouchableOpacity
             style={{ flex: 1 }}
-            onPress={() => setIsExpanded(v => !v)}
+            onPress={() => setIsExpanded(v => (hasMatchedItem || Boolean(statusTag) ? !isRowExpanded : !v))}
             activeOpacity={0.7}
           >
             <View style={styles.masterTitleRow}>
-              <Text
-                style={[
-                  styles.title,
-                  {
-                    color: allDone ? theme.good : theme.ink,
-                    textDecorationLine: allDone ? 'line-through' : 'none',
-                    opacity: allDone ? 0.8 : 1,
-                  },
-                ]}
-              >
-                Kiện {palletNo} — {qty.toLocaleString('vi-VN')} pcs
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, flex: 1 }}>
+                <Text
+                  style={[
+                    styles.title,
+                    {
+                      color: allDone ? theme.good : (isCardHighlighted ? finalBorderColor : theme.ink),
+                      textDecorationLine: allDone ? 'line-through' : 'none',
+                      opacity: allDone ? 0.8 : 1,
+                      fontWeight: isCardHighlighted ? '800' : '700',
+                    },
+                  ]}
+                >
+                  Kiện {palletNo} — {qty.toLocaleString('vi-VN')} pcs
+                </Text>
+                {hasMatchedItem ? (
+                  <View style={[styles.palletMatchTag, { backgroundColor: theme.accent }]}>
+                    <Ionicons name="sparkles" size={10} color="#fff" style={{ marginRight: 3 }} />
+                    <Text style={styles.palletMatchTagText}>Khớp tìm kiếm</Text>
+                  </View>
+                ) : statusTag ? (
+                  <View style={[styles.palletMatchTag, { backgroundColor: statusTag.color }]}>
+                    <Ionicons name={statusTag.icon} size={10} color="#fff" style={{ marginRight: 3 }} />
+                    <Text style={styles.palletMatchTagText}>{statusTag.label}</Text>
+                  </View>
+                ) : null}
+              </View>
               <View style={styles.masterPill}>
                 <Text style={{ fontSize: 12, color: allDone ? theme.good : theme.accent, fontWeight: '700' }}>
                   {allDone ? 'Xong 100%' : `${doneCount}/${pallet.items.length} mã`}
                 </Text>
                 <Ionicons
-                  name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                  name={isRowExpanded ? 'chevron-up' : 'chevron-down'}
                   size={15}
                   color={theme.sub}
                 />
@@ -307,10 +423,9 @@ export default function PalletRow({
         </View>
 
         {/* Danh sách các sản phẩm trong kiện khi mở rộng */}
-        {isExpanded && (
+        {isRowExpanded && (
           <View style={styles.itemsBox}>
             {itemPackInfos.map(({ it, info }) => {
-              const q = highlightNtk.trim().toLowerCase();
               const isMatch = Boolean(q && String(it.ntk || '').toLowerCase().includes(q));
               const isMatchRef = Boolean(q && it.order_ref && String(it.order_ref).toLowerCase().includes(q));
               return renderCleanItemRow(it, info, isMatch, isMatchRef);
@@ -329,10 +444,36 @@ export default function PalletRow({
   const line = pallet.items[0];
   const packInfo = getItemPackInfo(line);
   const done = packInfo.isComplete;
+  const isUnlabeledSingle = !packInfo.isLabeled;
+  const isIncompleteSingle = !packInfo.isFullQty;
+  const isBothSingle = isUnlabeledSingle && isIncompleteSingle;
 
   const q = highlightNtk.trim().toLowerCase();
   const isMatchSingle = Boolean(q && String(line?.ntk || '').toLowerCase().includes(q));
   const isMatchRefSingle = Boolean(q && line?.order_ref && String(line.order_ref).toLowerCase().includes(q));
+  const isPalletMatch = isMatchSingle || isMatchRefSingle;
+
+  let singleStatusTag = null;
+  let singleStatusBorder = null;
+  let singleStatusBg = null;
+
+  if (activeStatusFilter === 'both' && isBothSingle) {
+    singleStatusTag = { label: 'Bị cả hai', icon: 'alert-circle', color: '#dc2626' };
+    singleStatusBorder = '#dc2626';
+    singleStatusBg = '#dc26260e';
+  } else if (activeStatusFilter === 'unlabeled' && isUnlabeledSingle) {
+    singleStatusTag = { label: 'Chưa dán nhãn', icon: 'pricetag', color: theme.bad };
+    singleStatusBorder = theme.bad;
+    singleStatusBg = theme.bad + '0e';
+  } else if (activeStatusFilter === 'incomplete' && isIncompleteSingle) {
+    singleStatusTag = { label: 'Chưa đủ SL', icon: 'hourglass', color: theme.warn };
+    singleStatusBorder = theme.warn;
+    singleStatusBg = theme.warn + '0e';
+  }
+
+  const isSingleHighlight = isPalletMatch || Boolean(singleStatusBorder);
+  const singleCardBorder = isPalletMatch ? theme.accent : singleStatusBorder;
+  const singleCardBg = isPalletMatch ? (theme.accent + '0e') : singleStatusBg;
 
   let checkBorderColor = theme.line;
   let checkBgColor = theme.bg;
@@ -353,7 +494,23 @@ export default function PalletRow({
   }
 
   return (
-    <View style={[styles.palletCard, { borderTopColor: theme.line }]}>
+    <View
+      style={[
+        styles.palletCard,
+        {
+          borderTopColor: isSingleHighlight ? singleCardBorder : theme.line,
+          ...(isSingleHighlight ? {
+            backgroundColor: singleCardBg,
+            borderColor: singleCardBorder,
+            borderWidth: 1.5,
+            borderRadius: 10,
+            paddingHorizontal: 8,
+            paddingVertical: 10,
+            marginVertical: 4,
+          } : {}),
+        },
+      ]}
+    >
       <View style={styles.masterHeader}>
         <TouchableOpacity
           style={[
@@ -376,18 +533,32 @@ export default function PalletRow({
             onPress={() => line && handleQuickToggle(line)}
             activeOpacity={0.7}
           >
-            <Text
-              style={[
-                styles.title,
-                {
-                  color: done ? theme.good : theme.ink,
-                  textDecorationLine: done ? 'line-through' : 'none',
-                  opacity: done ? 0.8 : 1,
-                },
-              ]}
-            >
-              Kiện {palletNo} — {qty.toLocaleString('vi-VN')} pcs
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+              <Text
+                style={[
+                  styles.title,
+                  {
+                    color: done ? theme.good : (isSingleHighlight ? singleCardBorder : theme.ink),
+                    textDecorationLine: done ? 'line-through' : 'none',
+                    opacity: done ? 0.8 : 1,
+                    fontWeight: isSingleHighlight ? '800' : '700',
+                  },
+                ]}
+              >
+                Kiện {palletNo} — {qty.toLocaleString('vi-VN')} pcs
+              </Text>
+              {isPalletMatch ? (
+                <View style={[styles.palletMatchTag, { backgroundColor: theme.accent }]}>
+                  <Ionicons name="sparkles" size={10} color="#fff" style={{ marginRight: 3 }} />
+                  <Text style={styles.palletMatchTagText}>Khớp tìm kiếm</Text>
+                </View>
+              ) : singleStatusTag ? (
+                <View style={[styles.palletMatchTag, { backgroundColor: singleStatusTag.color }]}>
+                  <Ionicons name={singleStatusTag.icon} size={10} color="#fff" style={{ marginRight: 3 }} />
+                  <Text style={styles.palletMatchTagText}>{singleStatusTag.label}</Text>
+                </View>
+              ) : null}
+            </View>
           </TouchableOpacity>
           {line ? renderCleanItemRow(line, packInfo, isMatchSingle, isMatchRefSingle) : null}
         </View>
@@ -522,5 +693,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 3,
+  },
+  palletMatchTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  palletMatchTagText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  itemCodeBadge: {
+    alignSelf: 'flex-start',
   },
 });
